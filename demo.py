@@ -57,10 +57,12 @@ if __name__ == '__main__':
         with open(args.base_path + '/../' + args.gt_file, "r") as f:
             gts = f.readlines()
             split_flag = ',' if ',' in gts[0] else '\t'
-            x, y, w, h = map(int, gts[0].rstrip().split(split_flag))
+            gts = list(map(lambda x: list(map(int, x.rstrip().split(split_flag))), gts))
+            x, y, w, h = gts[0]
     else:
         try:
             init_rect = cv2.selectROI('SiamMask', ims[0], False, False)
+            gts = None
             x, y, w, h = init_rect
         except:
             exit()
@@ -72,6 +74,7 @@ if __name__ == '__main__':
             target_pos = np.array([x + w / 2, y + h / 2])
             target_sz = np.array([w, h])
             state = siamese_init(im, target_pos, target_sz, siammask, cfg['hp'], device=device)  # init tracker
+            state['gts'] = gts
         elif f > 0:  # tracking
             state = siamese_track(state, im, mask_enable=False, refine_enable=True, device=device)  # track
             # location = state['ploygon'].flatten()

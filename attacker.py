@@ -33,29 +33,26 @@ class AttackWrapper(object):
 
     def attack(self):
 
-        alpha = 1e4
-        num_iters = 80
+        num_iters = 150
+        adam_lr = 200
 
         track_res, score_res, pscore_res = self.get_tracking_result(self.template)
         labels = self.get_label(track_res, need_iou=True)
         mask = torch.from_numpy(circle_mask()).cuda().permute(2,0,1).unsqueeze(dim=0)
 
         pert = torch.tensor(self.template, requires_grad=True)
-        # optimizer = torch.optim.Adam([torch.masked_select(pert, mask==1)], lr=0.5)
+        optimizer = torch.optim.Adam([pert], lr=adam_lr)
         for i in range(num_iters):
             score, delta = self.model.track(self.x_crop, pert)
-            loss = self.loss2(score, delta, pscore_res, labels)
-            # optimizer.zero_grad()
-            loss.backward(retain_graph=True)
-            # optimizer.step()
-            # pert.data = pert.detach().clamp(0, 255)
+            loss = -self.loss2(score, delta, pscore_res, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-            grad = mask * pert.grad.detach()
-            grad = grad / norms(grad)
-            pert.data = (pert + alpha * grad).clamp(0, 255)
-            pert.grad.zero_()
-        
-        self.show_label(labels, track_res)
+            pert.data = self.template.data*(1-mask) + pert.data*mask
+            pert.data = (pert.data).clamp(0, 255)
+       
+        # self.show_label(labels, track_res)
         self.show_attacking(track_res, score_res, pscore_res, pert)
         plt.show()
 
@@ -96,7 +93,7 @@ class AttackWrapper(object):
 
         return (res_cx, res_cy, res_w, res_h), score, pscore
     
-    def get_label(self, track_res, thr_iou=0.5, need_iou=False):
+    def get_label(self, track_res, thr_iou=0.2, need_iou=False):
 
         anchors = self.state['p'].anchor
         anchor_num = anchors.shape[0]
@@ -170,13 +167,13 @@ class AttackWrapper(object):
         ######################################   
         deltas_pred = delta.view(4,-1)
         diff = (deltas_pred - deltas_label).abs().sum(dim=0)
-        loss_delta = torch.index_select(diff, 0, pos).sum()
+        loss_delta = torch.index_select(diff, 0, pos).mean()
 
         print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, delta: {:.2f}'\
-                .format(torch.mean(pred_pos).cpu().data.numpy(),\
+                .format(torch.max(pred_pos).cpu().data.numpy(),\
                         torch.max(pred_neg).cpu().data.numpy(),\
                         loss_delta.cpu().data.numpy()))
-        return loss_clss * 100 
+        return loss_clss + loss_delta
         
 
     def show_label(self, labels, gt_bbox):
@@ -205,41 +202,43 @@ class AttackWrapper(object):
         plt.pause(0.01)
 
     def show_attacking(self, track_res, score, pscore, pert):
-        fig = plt.figure('Attacking')
+        fig, axes = plt.subplots(2,3, num='Attacking')
 
-        ax = fig.add_subplot(231)
-        ax.set_title('Before')
+        ax = axes[0,0]
+        ax.set_title('Result')
         res_cx, res_cy, res_w, res_h = track_res
         ax.imshow(self.x_crop.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
         rect = patches.Rectangle((res_cx-res_w/2, res_cy-res_h/2), res_w, res_h, linewidth=1, edgecolor='r', facecolor='none')
         ax.add_patch(rect)
 
-        ax = fig.add_subplot(232)
-        ax.set_title('Pscore')
+        ax = axes[0,1]
+        ax.set_title('Pscore_bef')
         ax.imshow(pscore.reshape(5,25,25).sum(axis=0))
 
-        ax = fig.add_subplot(233)
-        ax.set_title('score')
+        ax = axes[0,2]
+        ax.set_title('score_bef')
         ax.imshow(0.2*score.reshape(5,25,25).sum(axis=0))
 
         track_res, score, pscore = self.get_tracking_result(pert)
-
-        ax = fig.add_subplot(234)
-        ax.set_title('After')
+        ax = axes[0,0]
         res_cx, res_cy, res_w, res_h = track_res
-        ax.imshow(pert.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
-        rect = patches.Rectangle((res_cx-res_w/2, res_cy-res_h/2), res_w, res_h, linewidth=1, edgecolor='r', facecolor='none')
+        rect = patches.Rectangle((res_cx-res_w/2, res_cy-res_h/2), res_w, res_h, linewidth=1, edgecolor='y', facecolor='none')
         ax.add_patch(rect)
 
-        ax = fig.add_subplot(235)
+        ax = axes[1,0]
+        ax.set_title('Pert')
+        ax.imshow(pert.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
+        
+        ax = axes[1,1]
         ax.set_title('Pscore')
         ax.imshow(pscore.reshape(5,25,25).sum(axis=0))
 
-        ax = fig.add_subplot(236)
+        ax = axes[1,2]
         ax.set_title('score')
         ax.imshow(0.2*score.reshape(5,25,25).sum(axis=0))
 
         plt.pause(0.01)
+
 
 def norms(Z):
     """Compute norms over all but the first dimension"""

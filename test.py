@@ -104,7 +104,7 @@ def siamese_init(im, target_pos, target_sz, model, hp=None, device='cpu'):
     state['target_sz'] = target_sz
     # Dylan -> Add template and n_frame to state dict
     state['template'] = z.to(device)
-    state['n_frame'] = 1
+    state['n_frame'] = 0
     # <--
     return state
 
@@ -139,7 +139,7 @@ def siamese_track(state, im, mask_enable=False, refine_enable=False, device='cpu
 
     # Dylan --> attack on first frame
     state['n_frame'] += 1
-    if state['n_frame'] == 2:
+    if state['n_frame'] == 1:
         attacker = AttackWrapper(x_crop.to(device), state, scale_x)
         pert = attacker.attack()
         state['tem_pert'] = torch.clamp(pert, 0, 255).data
