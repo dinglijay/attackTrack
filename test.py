@@ -23,7 +23,7 @@ class Custom_(Custom):
         return rpn_pred_cls, rpn_pred_loc
 
 
-def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='torch'):
+def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans):
     """get differentiable subwindow wrt content subimage around pos. 
     im: input numpy image at k-th frame.
     pos: coordinate estimate of target center at (k-1)-th frame, ie, (y,x)
@@ -46,17 +46,13 @@ def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='
     
     
     im_sub = torch.Tensor(im[y_min:y_max+1, x_min:x_max+1,:])
-    im_sub = im_sub.permute(2, 0, 1).unsqueeze(0)
+    im_sub = im_sub.permute(2, 0, 1).unsqueeze(0)  #[wid, hei, 3] -> [1, 3, hei, wid]
     
-    im_sub = F.pad(im_sub, pad=(pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=avg_chans)
-    im_sub = im_sub.squeeze(0)
-    
-    if out_mode not in 'torch':
-        im_sub = im_sub.permute(1, 2, 0)
-        im_sub = im_sub.data.cpu().numpy()
+    im_sub = F.pad(im_sub, pad=(pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=avg_chans) #padding 
+    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='nearest') #resizing 
+    im_sub = im_sub.squeeze(0) #[1, 3, hei, wid] -> [3, hei, wid]
     
     return im_sub
-    
     
     
 
