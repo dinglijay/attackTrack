@@ -4,6 +4,10 @@ from custom import Custom
 from attacker import AttackWrapper
 from torchvision import transforms
 from matplotlib import pyplot as plt
+import numpy as np 
+import torch
+import torch.nn.functional as F
+
 
 
 class Custom_(Custom):
@@ -19,50 +23,68 @@ class Custom_(Custom):
         return rpn_pred_cls, rpn_pred_loc
 
 
-def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='torch'):
+def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans):
+    """get differentiable subwindow wrt content subimage around pos. 
+    im: input numpy image at k-th frame.
+    pos: coordinate estimate of target center at (k-1)-th frame, ie, (y,x)
+    model_sz: input dim of model. 
+    original_sz: original dim. 
+    avg_chans: averaged value of channels for padding. 
+    Return: (possibly) padded and resized subimage. 
+    """
     if isinstance(pos, float):
         pos = [pos, pos]
-    sz = original_sz
-    im_sz = im.shape
-    c = (original_sz + 1) / 2
-    context_xmin = round(pos[0] - c)
-    context_xmax = context_xmin + sz - 1
-    context_ymin = round(pos[1] - c)
-    context_ymax = context_ymin + sz - 1
-    left_pad = int(max(0., -context_xmin))
-    top_pad = int(max(0., -context_ymin))
-    right_pad = int(max(0., context_xmax - im_sz[1] + 1))
-    bottom_pad = int(max(0., context_ymax - im_sz[0] + 1))
+    hei, wid, chan = im.shape
+    length_half = int(round ((original_sz + 1) / 2)) #half length of square box
+    avg_chans = np.mean(avg_chans)
+    
+    x_min, pad_left = get_coordinate_min(pos[1], length_half)
+    y_min, pad_top = get_coordinate_min(pos[0], length_half)
+    
+    x_max, pad_right = get_coordinate_max(pos[1], length_half, wid)
+    y_max, pad_bottom = get_coordinate_max(pos[0], length_half, hei)
+    
+    
+    im_sub = torch.Tensor(im[y_min:y_max+1, x_min:x_max+1,:])
+    im_sub = im_sub.permute(2, 0, 1).unsqueeze(0)  #[wid, hei, 3] -> [1, 3, hei, wid]
+    
+    im_sub = F.pad(im_sub, pad=(pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=avg_chans) #padding 
+    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='nearest') #resizing 
+    im_sub = im_sub.squeeze(0) #[1, 3, hei, wid] -> [3, hei, wid]
+    
+    return im_sub
+    
+    
 
-    context_xmin = context_xmin + left_pad
-    context_xmax = context_xmax + left_pad
-    context_ymin = context_ymin + top_pad
-    context_ymax = context_ymax + top_pad
-
-    # zzp: a more easy speed version
-    r, c, k = im.shape
-    if any([top_pad, bottom_pad, left_pad, right_pad]):
-        te_im = np.zeros((r + top_pad + bottom_pad, c + left_pad + right_pad, k), np.uint8)
-        te_im[top_pad:top_pad + r, left_pad:left_pad + c, :] = im
-        if top_pad:
-            te_im[0:top_pad, left_pad:left_pad + c, :] = avg_chans
-        if bottom_pad:
-            te_im[r + top_pad:, left_pad:left_pad + c, :] = avg_chans
-        if left_pad:
-            te_im[:, 0:left_pad, :] = avg_chans
-        if right_pad:
-            te_im[:, c + left_pad:, :] = avg_chans
-        im_patch_original = te_im[int(context_ymin):int(context_ymax + 1), int(context_xmin):int(context_xmax + 1), :]
+def get_coordinate_min(coord_center, length_half):
+    """get min-side border coordinate and padding number.
+    coord_center: a center coordinate. 
+    length_half: half length of user-given (processed) square box. 
+    """
+    coord_center = int(round(coord_center))
+    if coord_center - length_half >= 0:
+        coord_min = coord_center - length_half
+        pad_num = 0
     else:
-        im_patch_original = im[int(context_ymin):int(context_ymax + 1), int(context_xmin):int(context_xmax + 1), :]
+        coord_min = 0
+        pad_num = length_half - coord_center
+    return coord_min, pad_num
 
-    if not np.array_equal(model_sz, original_sz):
-        im_patch = cv2.resize(im_patch_original, (model_sz, model_sz))
+
+
+def get_coordinate_max(coord_center, length_half, org_coord_max):
+    """get max-side border coordinate and padding number.
+    coord_center: a center coordinate. 
+    length_half: half length of user-given (processed) square box. 
+    """
+    coord_center = int(round(coord_center))
+    if coord_center + length_half <= org_coord_max:
+        coord_max = coord_center + length_half
+        pad_num = 0
     else:
-        im_patch = im_patch_original
-    # cv2.imshow('crop', im_patch)
-    # cv2.waitKey(0)
-    return im_to_torch(im_patch) if out_mode in 'torch' else im_patch
+        coord_max = org_coord_max
+        pad_num = coord_center + length_half - coord_max 
+    return coord_max, pad_num
 
 
 def siamese_init(im, target_pos, target_sz, model, hp=None, device='cpu'):
