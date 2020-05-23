@@ -139,16 +139,16 @@ def siamese_track(state, im, mask_enable=False, refine_enable=False, device='cpu
 
     # Dylan --> attack on first frame
     state['n_frame'] += 1
-    if state['n_frame'] == 1:
-        attacker = AttackWrapper(x_crop.to(device), state, scale_x)
-        pert = attacker.attack()
-        state['tem_pert'] = torch.clamp(pert, 0, 255).data
-        
-        plt.figure('img_pert')
-        perted_img = pert.data.squeeze().cpu().numpy().transpose(1,2,0)[...,::-1].astype(int)
-        plt.imshow(perted_img)
-        plt.pause(0.01)
-    # <--
+    attacker = AttackWrapper(x_crop.to(device), state, scale_x)
+    template, x_crop = attacker.attack()
+
+    # fig, ax = plt.subplots(1,2,num='template_pert & xcrop_pert')
+    # ax[0].set_title('template_pert')
+    # ax[0].imshow(template.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+    # ax[1].set_title('x_crop')
+    # ax[1].imshow(x_crop.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+    # plt.pause(0.01)
+# <--
     
     if mask_enable:
         score, delta, mask = net.track_mask(x_crop.to(device))
