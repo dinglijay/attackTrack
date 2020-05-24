@@ -23,68 +23,39 @@ class Custom_(Custom):
         return rpn_pred_cls, rpn_pred_loc
 
 
-def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans):
+def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='torch'):
     """get differentiable subwindow wrt content subimage around pos. 
-    im: input numpy image at k-th frame.
-    pos: coordinate estimate of target center at (k-1)-th frame, ie, (y,x)
-    model_sz: input dim of model. 
-    original_sz: original dim. 
-    avg_chans: averaged value of channels for padding. 
-    Return: (possibly) padded and resized subimage. 
+    To do:
+    --> F.pad only suport the scalar value padding.
+    --> How resize mode matters? 
     """
     if isinstance(pos, float):
         pos = [pos, pos]
-    hei, wid, chan = im.shape
-    length_half = int(round ((original_sz + 1) / 2)) #half length of square box
-    avg_chans = np.mean(avg_chans)
-    
-    x_min, pad_left = get_coordinate_min(pos[1], length_half)
-    y_min, pad_top = get_coordinate_min(pos[0], length_half)
-    
-    x_max, pad_right = get_coordinate_max(pos[1], length_half, wid)
-    y_max, pad_bottom = get_coordinate_max(pos[0], length_half, hei)
-    
-    
-    im_sub = torch.Tensor(im[y_min:y_max+1, x_min:x_max+1,:])
+    sz = original_sz
+    im_sz = im.shape
+    c = (original_sz + 1) / 2
+    context_xmin = round(pos[0] - c)
+    context_xmax = context_xmin + sz - 1
+    context_ymin = round(pos[1] - c)
+    context_ymax = context_ymin + sz - 1
+    left_pad = int(max(0., -context_xmin))
+    top_pad = int(max(0., -context_ymin))
+    right_pad = int(max(0., context_xmax - im_sz[1] + 1))
+    bottom_pad = int(max(0., context_ymax - im_sz[0] + 1))
+
+    context_xmin = max(int(context_xmin), 0)
+    context_xmax = min(int(context_xmax), im_sz[1])
+    context_ymin = max(int(context_ymin), 0)
+    context_ymax = min(int(context_ymax), im_sz[0])
+
+    im_sub = torch.Tensor(im[context_ymin:context_ymax+1, context_xmin:context_xmax+1,:])
     im_sub = im_sub.permute(2, 0, 1).unsqueeze(0)  #[wid, hei, 3] -> [1, 3, hei, wid]
     
-    im_sub = F.pad(im_sub, pad=(pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=avg_chans) #padding 
-    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='nearest') #resizing 
+    im_sub = F.pad(im_sub, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg_chans.mean()) #padding 
+    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='bilinear') #resizing 
     im_sub = im_sub.squeeze(0) #[1, 3, hei, wid] -> [3, hei, wid]
     
-    return im_sub
-    
-    
-
-def get_coordinate_min(coord_center, length_half):
-    """get min-side border coordinate and padding number.
-    coord_center: a center coordinate. 
-    length_half: half length of user-given (processed) square box. 
-    """
-    coord_center = int(round(coord_center))
-    if coord_center - length_half >= 0:
-        coord_min = coord_center - length_half
-        pad_num = 0
-    else:
-        coord_min = 0
-        pad_num = length_half - coord_center
-    return coord_min, pad_num
-
-
-
-def get_coordinate_max(coord_center, length_half, org_coord_max):
-    """get max-side border coordinate and padding number.
-    coord_center: a center coordinate. 
-    length_half: half length of user-given (processed) square box. 
-    """
-    coord_center = int(round(coord_center))
-    if coord_center + length_half <= org_coord_max:
-        coord_max = coord_center + length_half
-        pad_num = 0
-    else:
-        coord_max = org_coord_max
-        pad_num = coord_center + length_half - coord_max 
-    return coord_max, pad_num
+    return im_sub if out_mode=='torch' else im_sz.permute(1,2,0).cpu().numpy()
 
 
 def siamese_init(im, target_pos, target_sz, model, hp=None, device='cpu'):
