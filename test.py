@@ -4,6 +4,10 @@ from custom import Custom
 from attacker import AttackWrapper
 from torchvision import transforms
 from matplotlib import pyplot as plt
+import numpy as np 
+import torch
+import torch.nn.functional as F
+
 
 
 class Custom_(Custom):
@@ -20,6 +24,11 @@ class Custom_(Custom):
 
 
 def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='torch'):
+    """get differentiable subwindow wrt content subimage around pos. 
+    To do:
+    --> F.pad only suport the scalar value padding.
+    --> How resize mode matters? 
+    """
     if isinstance(pos, float):
         pos = [pos, pos]
     sz = original_sz
@@ -34,35 +43,19 @@ def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='
     right_pad = int(max(0., context_xmax - im_sz[1] + 1))
     bottom_pad = int(max(0., context_ymax - im_sz[0] + 1))
 
-    context_xmin = context_xmin + left_pad
-    context_xmax = context_xmax + left_pad
-    context_ymin = context_ymin + top_pad
-    context_ymax = context_ymax + top_pad
+    context_xmin = max(int(context_xmin), 0)
+    context_xmax = min(int(context_xmax), im_sz[1])
+    context_ymin = max(int(context_ymin), 0)
+    context_ymax = min(int(context_ymax), im_sz[0])
 
-    # zzp: a more easy speed version
-    r, c, k = im.shape
-    if any([top_pad, bottom_pad, left_pad, right_pad]):
-        te_im = np.zeros((r + top_pad + bottom_pad, c + left_pad + right_pad, k), np.uint8)
-        te_im[top_pad:top_pad + r, left_pad:left_pad + c, :] = im
-        if top_pad:
-            te_im[0:top_pad, left_pad:left_pad + c, :] = avg_chans
-        if bottom_pad:
-            te_im[r + top_pad:, left_pad:left_pad + c, :] = avg_chans
-        if left_pad:
-            te_im[:, 0:left_pad, :] = avg_chans
-        if right_pad:
-            te_im[:, c + left_pad:, :] = avg_chans
-        im_patch_original = te_im[int(context_ymin):int(context_ymax + 1), int(context_xmin):int(context_xmax + 1), :]
-    else:
-        im_patch_original = im[int(context_ymin):int(context_ymax + 1), int(context_xmin):int(context_xmax + 1), :]
-
-    if not np.array_equal(model_sz, original_sz):
-        im_patch = cv2.resize(im_patch_original, (model_sz, model_sz))
-    else:
-        im_patch = im_patch_original
-    # cv2.imshow('crop', im_patch)
-    # cv2.waitKey(0)
-    return im_to_torch(im_patch) if out_mode in 'torch' else im_patch
+    im_sub = torch.Tensor(im[context_ymin:context_ymax+1, context_xmin:context_xmax+1,:])
+    im_sub = im_sub.permute(2, 0, 1).unsqueeze(0)  #[wid, hei, 3] -> [1, 3, hei, wid]
+    
+    im_sub = F.pad(im_sub, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg_chans.mean()) #padding 
+    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='bilinear') #resizing 
+    im_sub = im_sub.squeeze(0) #[1, 3, hei, wid] -> [3, hei, wid]
+    
+    return im_sub if out_mode=='torch' else im_sz.permute(1,2,0).cpu().numpy()
 
 
 def siamese_init(im, target_pos, target_sz, model, hp=None, device='cpu'):
@@ -139,16 +132,16 @@ def siamese_track(state, im, mask_enable=False, refine_enable=False, device='cpu
 
     # Dylan --> attack on first frame
     state['n_frame'] += 1
-    if state['n_frame'] == 1:
-        attacker = AttackWrapper(x_crop.to(device), state, scale_x)
-        pert = attacker.attack()
-        state['tem_pert'] = torch.clamp(pert, 0, 255).data
-        
-        plt.figure('img_pert')
-        perted_img = pert.data.squeeze().cpu().numpy().transpose(1,2,0)[...,::-1].astype(int)
-        plt.imshow(perted_img)
-        plt.pause(0.01)
-    # <--
+    attacker = AttackWrapper(x_crop.to(device), state, scale_x)
+    template, x_crop = attacker.attack()
+
+    # fig, ax = plt.subplots(1,2,num='template_pert & xcrop_pert')
+    # ax[0].set_title('template_pert')
+    # ax[0].imshow(template.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+    # ax[1].set_title('x_crop')
+    # ax[1].imshow(x_crop.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+    # plt.pause(0.01)
+# <--
     
     if mask_enable:
         score, delta, mask = net.track_mask(x_crop.to(device))

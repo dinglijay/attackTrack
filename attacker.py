@@ -33,38 +33,73 @@ class AttackWrapper(object):
 
     def attack(self):
 
-        num_iters = 150
-        adam_lr = 200
+        if self.state['n_frame'] == 1:
+            return self.gen_template()
+        else:
+            return self.gen_xcrop()
+        
+    def gen_template(self):
+        num_iters = 200
+        adam_lr = 500
+        mu, sigma = 127, 10
+
+        label_thr_iou = 0.3
 
         track_res, score_res, pscore_res = self.get_tracking_result(self.template)
-        labels = self.get_label(track_res, need_iou=True)
+        labels = self.get_label(track_res, thr_iou=label_thr_iou, need_iou=True)
         mask = torch.from_numpy(circle_mask()).cuda().permute(2,0,1).unsqueeze(dim=0)
+        self.state['mask_255'] = mask_255 = F.pad(mask, pad=(64,64,64,64))
 
-        pert = torch.tensor(self.template, requires_grad=True)
+        pert = (mu + sigma * torch.randn_like(self.template)).clamp(0,255)
+        pert = torch.tensor(pert, device='cuda', requires_grad=True)
         optimizer = torch.optim.Adam([pert], lr=adam_lr)
         for i in range(num_iters):
-            score, delta = self.model.track(self.x_crop, pert)
+
+            pert_255 = F.pad(pert*mask, pad=(64,64,64,64))
+            template = self.template*(1-mask) + pert*mask
+            x_crop = self.x_crop*(1-mask_255) + pert_255*mask_255
+
+            # fig, ax = plt.subplots(1,2,num='x_crop & template')
+            # ax[0].set_title('template')
+            # ax[0].imshow(template.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+            # ax[1].set_title('x_crop')
+            # ax[1].imshow(x_crop.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+            # plt.pause(0.01)
+            
+            score, delta = self.model.track(x_crop, template)
             loss = -self.loss2(score, delta, pscore_res, labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
-            pert.data = self.template.data*(1-mask) + pert.data*mask
             pert.data = (pert.data).clamp(0, 255)
-       
+
+        state = self.state
+        state['pert'] = pert.detach()*mask
+        state['pert_255'] = F.pad(pert.detach()*mask, pad=(64,64,64,64))
+        state['tem_pert'] = (self.template.detach()*(1-mask) + state['pert']).clamp(0, 255)
+        state['xcrop_pert'] =self.x_crop*(1-mask_255) + pert_255*mask_255
+        
         # self.show_label(labels, track_res)
-        self.show_attacking(track_res, score_res, pscore_res, pert)
+        self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
         plt.show()
 
-        return pert.detach()
+        return state['tem_pert'], state['xcrop_pert']
 
-    def get_tracking_result(self, template):
+    def gen_xcrop(self):
+        state = self.state
+        mask_255 = state['mask_255']
+        pert_255 = state['pert_255']
+        state['xcrop_pert'] =self.x_crop*(1-mask_255) + pert_255*mask_255
+        return state['tem_pert'], state['xcrop_pert']
+
+    def get_tracking_result(self, template, x_crop=None):
         p = self.state['p']
         window = self.state['window']
         target_pos = self.state['target_pos']
         target_sz = self.state['target_sz']
 
-        score_, delta = self.model.track(self.x_crop, template)
+        if x_crop is None: x_crop = self.x_crop
+        score_, delta = self.model.track(x_crop, template)
         delta = delta.permute(1, 2, 3, 0).contiguous().view(4, -1).data.cpu().numpy()
         score = F.softmax(score_.permute(1, 2, 3, 0).contiguous().view(2, -1).permute(1, 0), dim=1).data[:, 1].cpu().numpy()
 
@@ -158,21 +193,25 @@ class AttackWrapper(object):
         b, a2, h, w = score.size()
         assert b==1
         score = score.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
-        clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
+        # clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
+        clss_pred = F.log_softmax(score, dim=4).view(-1,2)
+        loss_clss = F.nll_loss(clss_pred, clss_label)
         
         pred_pos = torch.index_select(clss_pred, 0, pos)
         pred_neg = torch.index_select(clss_pred, 0, neg)
-        loss_clss = torch.max(pred_neg) - torch.mean(pred_pos)
+        # loss_clss = torch.max(pred_neg) - torch.mean(pred_pos)
 
         ######################################   
         deltas_pred = delta.view(4,-1)
         diff = (deltas_pred - deltas_label).abs().sum(dim=0)
         loss_delta = torch.index_select(diff, 0, pos).mean()
 
-        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, delta: {:.2f}'\
+        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.2f}'\
                 .format(torch.max(pred_pos).cpu().data.numpy(),\
                         torch.max(pred_neg).cpu().data.numpy(),\
+                        loss_clss.cpu().data.numpy(),\
                         loss_delta.cpu().data.numpy()))
+
         return loss_clss + loss_delta
         
 
@@ -201,7 +240,7 @@ class AttackWrapper(object):
                 ax.add_patch(bb_center)
         plt.pause(0.01)
 
-    def show_attacking(self, track_res, score, pscore, pert):
+    def show_attacking(self, track_res, score, pscore, template, x_crop=None):
         fig, axes = plt.subplots(2,3, num='Attacking')
 
         ax = axes[0,0]
@@ -219,15 +258,16 @@ class AttackWrapper(object):
         ax.set_title('score_bef')
         ax.imshow(0.2*score.reshape(5,25,25).sum(axis=0))
 
-        track_res, score, pscore = self.get_tracking_result(pert)
+        if x_crop is None: x_crop = self.x_crop
+        track_res, score, pscore = self.get_tracking_result(template, x_crop)
         ax = axes[0,0]
         res_cx, res_cy, res_w, res_h = track_res
         rect = patches.Rectangle((res_cx-res_w/2, res_cy-res_h/2), res_w, res_h, linewidth=1, edgecolor='y', facecolor='none')
         ax.add_patch(rect)
 
         ax = axes[1,0]
-        ax.set_title('Pert')
-        ax.imshow(pert.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
+        ax.set_title('template')
+        ax.imshow(template.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
         
         ax = axes[1,1]
         ax.set_title('Pscore')
@@ -257,7 +297,7 @@ def sz_wh(wh):
     sz2 = (wh[0] + pad) * (wh[1] + pad)
     return np.sqrt(sz2)
 
-def circle_mask(shape=(127,127), loc=(64,64), diameter=10, sharpness=40):
+def circle_mask(shape=(127,127), loc=(64,64), diameter=12, sharpness=40):
   """Return a circular mask of a given shape"""
 
   x1 = loc[0]-diameter
