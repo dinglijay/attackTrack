@@ -1,0 +1,14 @@
+Cython
+colorama
+numpy
+requests
+fire
+matplotlib
+numba
+scipy
+h5py
+pandas
+tqdm
+tensorboardX
+opencv_python
+kornia
