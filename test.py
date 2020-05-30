@@ -1,13 +1,13 @@
 from tools.test import * 
 from custom import Custom
 
-from attacker import AttackWrapper
 from torchvision import transforms
 from matplotlib import pyplot as plt
 import numpy as np 
 import torch
 import torch.nn.functional as F
 
+import attacker
 
 
 class Custom_(Custom):
@@ -23,7 +23,7 @@ class Custom_(Custom):
         return rpn_pred_cls, rpn_pred_loc
 
 
-def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='torch'):
+def get_subwindow_tracking_(im, pos, model_sz, original_sz, avg_chans):
     """get differentiable subwindow wrt content subimage around pos. 
     To do:
     --> F.pad only suport the scalar value padding.
@@ -32,7 +32,7 @@ def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='
     if isinstance(pos, float):
         pos = [pos, pos]
     sz = original_sz
-    im_sz = im.shape
+    N, C, H, W = im.shape
     c = (original_sz + 1) / 2
     context_xmin = round(pos[0] - c)
     context_xmax = context_xmin + sz - 1
@@ -40,22 +40,21 @@ def get_subwindow_tracking(im, pos, model_sz, original_sz, avg_chans, out_mode='
     context_ymax = context_ymin + sz - 1
     left_pad = int(max(0., -context_xmin))
     top_pad = int(max(0., -context_ymin))
-    right_pad = int(max(0., context_xmax - im_sz[1] + 1))
-    bottom_pad = int(max(0., context_ymax - im_sz[0] + 1))
+    right_pad = int(max(0., context_xmax - W + 1))
+    bottom_pad = int(max(0., context_ymax - H + 1))
 
     context_xmin = max(int(context_xmin), 0)
-    context_xmax = min(int(context_xmax), im_sz[1])
+    context_xmax = min(int(context_xmax), W-1)
     context_ymin = max(int(context_ymin), 0)
-    context_ymax = min(int(context_ymax), im_sz[0])
+    context_ymax = min(int(context_ymax), H-1)
 
-    im_sub = torch.Tensor(im[context_ymin:context_ymax+1, context_xmin:context_xmax+1,:])
-    im_sub = im_sub.permute(2, 0, 1).unsqueeze(0)  #[wid, hei, 3] -> [1, 3, hei, wid]
-    
-    im_sub = F.pad(im_sub, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg_chans.mean()) #padding 
-    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='bilinear') #resizing 
-    im_sub = im_sub.squeeze(0) #[1, 3, hei, wid] -> [3, hei, wid]
-    
-    return im_sub if out_mode=='torch' else im_sz.permute(1,2,0).cpu().numpy()
+    im = torch.narrow(im, 2, context_ymin, context_ymax-context_ymin+1)
+    im = torch.narrow(im, 3, context_xmin, context_xmax-context_xmin+1)
+      
+    im_sub = F.pad(im, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg_chans) 
+    im_sub = F.interpolate(im_sub, size=(model_sz, model_sz), mode='bilinear')
+   
+    return im_sub
 
 
 def siamese_init(im, target_pos, target_sz, model, hp=None, device='cpu'):
@@ -95,9 +94,12 @@ def siamese_init(im, target_pos, target_sz, model, hp=None, device='cpu'):
     state['window'] = window
     state['target_pos'] = target_pos
     state['target_sz'] = target_sz
-    # Dylan -> Add template and n_frame to state dict
+  # Dylan -> Add template and n_frame to state dict
     state['template'] = z.to(device)
     state['n_frame'] = 0
+    state['first_im'] = im
+    state['pos_z'] = target_pos
+    state['s_z'] = s_z
     # <--
     return state
 
@@ -132,8 +134,9 @@ def siamese_track(state, im, mask_enable=False, refine_enable=False, device='cpu
 
     # Dylan --> attack on first frame
     state['n_frame'] += 1
-    attacker = AttackWrapper(x_crop.to(device), state, scale_x)
-    template, x_crop = attacker.attack()
+    state['im'] = im
+    attackerWraper = attacker.AttackWrapper(x_crop.to(device), state, scale_x, round(s_x))
+    template, x_crop = attackerWraper.attack()
 
     # fig, ax = plt.subplots(1,2,num='template_pert & xcrop_pert')
     # ax[0].set_title('template_pert')
@@ -147,7 +150,7 @@ def siamese_track(state, im, mask_enable=False, refine_enable=False, device='cpu
         score, delta, mask = net.track_mask(x_crop.to(device))
     else:
         # Dylan --> add 'template' to net.track input
-        score, delta = net.track(x_crop.to(device), state['tem_pert']) 
+        score, delta = net.track(x_crop.to(device), template.to(device)) 
         # <--
 
     delta = delta.permute(1, 2, 3, 0).contiguous().view(4, -1).data.cpu().numpy()

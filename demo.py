@@ -75,6 +75,7 @@ if __name__ == '__main__':
             target_sz = np.array([w, h])
             state = siamese_init(im, target_pos, target_sz, siammask, cfg['hp'], device=device)  # init tracker
             state['gts'] = gts
+            state['device'] = device
         elif f > 0:  # tracking
             state = siamese_track(state, im, mask_enable=False, refine_enable=True, device=device)  # track
             # location = state['ploygon'].flatten()
