@@ -12,7 +12,7 @@ import attacker
 
 class Custom_(Custom):
     def __init__(self, pretrain=False, **kwargs):
-        super(Custom_, self).__init__(**kwargs)
+        super(Custom_, self).__init__(pretrain=pretrain, **kwargs)
 
     def track(self, search, template):
         # Dylan --> Override Custom.track
