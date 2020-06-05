@@ -10,6 +10,7 @@ from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, tracker_init, tracker_track
+from test import siamese_init, siamese_track, Custom_
 
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
@@ -37,6 +38,11 @@ if __name__ == '__main__':
         siammask = load_pretrain(siammask, args.resume)
     siammask.eval().to(device)
 
+    # Setup Original Model
+    siammask0 = Custom_(anchors=cfg['anchors'])
+    siammask0 = load_pretrain(siammask0, args.resume)
+    siammask0.eval().to(device)
+    
     # Parse Image file
     img_files = sorted(glob.glob(join(args.base_path, '*.jp*')))
     ims = [cv2.imread(imf) for imf in img_files]
@@ -67,14 +73,27 @@ if __name__ == '__main__':
             state = tracker_init(im, target_pos, target_sz, siammask, device=device)  # init tracker
             state['gts'] = gts
             state['device'] = device
+            # init original model
+            state0 = siamese_init(im, target_pos, target_sz, siammask0, cfg['hp'], device=device)  # init tracker
+            state0['gts'] = gts
+            state0['device'] = device
+
         elif f > 0:  # tracking
+            im_copy = im.copy()
             state = tracker_track(state, im, siammask, device=device)  # track
             target_pos, target_sz =state['target_pos'], state['target_sz']
             x, y = (target_pos - target_sz/2).astype(int)
             x2, y2 = (target_pos + target_sz/2).astype(int)
             cv2.rectangle(im, (x, y), (x2, y2), (0, 255, 0), 4)
+            # cv2.imshow('SiamMask', im)
+            # original tracking
+            state0 = siamese_track(state0, im_copy, mask_enable=False, refine_enable=True, device=device) 
+            target_pos, target_sz =state0['target_pos'], state0['target_sz']
+            x, y = (target_pos - target_sz/2).astype(int)
+            x2, y2 = (target_pos + target_sz/2).astype(int)
+            cv2.rectangle(im, (x, y), (x2, y2), (0, 0, 255), 4)
             cv2.imshow('SiamMask', im)
-            key = cv2.waitKey(1)
+            key = cv2.waitKey(0)
             if key == ord('q'):
                 break
 

@@ -113,7 +113,7 @@ class PenaltyLayer(torch.nn.Module):
             return torch.sqrt(sz2)
 
         # size penalty      
-        target_sz_in_crop = torch.tensor(target_sz*scale_x).split(1)
+        target_sz_in_crop = (target_sz*scale_x).clone().detach().split(1)
         s_c = change(sz(delta[:, 2, :], delta[:, 3, :]) / (sz_wh(target_sz_in_crop)))  # scale penalty
         r_c = change((target_sz_in_crop[0] / target_sz_in_crop[1]) / (delta[:, 2, :] / delta[:, 3, :]))  # ratio penalty
 
@@ -168,11 +168,6 @@ def tracker_init(im, target_pos, target_sz, model, device='cpu'):
     
     state['target_pos'] = target_pos
     state['target_sz'] = target_sz
-    # Dylan -> Add template and n_frame to state dict
-    state['n_frame'] = 0
-    state['first_im'] = im
-    state['pos_z'] = target_pos
-    state['s_z'] = s_z
 
     return state
 
@@ -195,7 +190,7 @@ def tracker_track(state, im, model, device='cpu', debug=False):
                                                 torch.from_numpy(target_pos).to(device),
                                                 torch.tensor(s_x, device=device),
                                                 torch.tensor(target_sz, device=device),
-                                                torch.tensor(s_x, device=device))
+                                                torch.tensor(scale_x, device=device))
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
 
