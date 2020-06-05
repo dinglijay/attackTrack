@@ -1,25 +1,17 @@
-# --------------------------------------------------------
-# SiamMask
-# Licensed under The MIT License
-# Written by Qiang Wang (wangqiang2015 at ia.ac.cn)
-# --------------------------------------------------------
 import glob
 import argparse
 import torch
 import cv2
-
 import numpy as np
+from os.path import join, isdir, isfile
 
 from utils.config_helper import load_config
-from os.path import join, isdir, isfile
 from utils.load_helper import load_pretrain
+from utils.tracker_config import TrackerConfig
 
-# Dylan --> Using overrided func
-# from tools.test import *
-# from custom import Custom
-from test import siamese_init, siamese_track
-from test import Custom_
-# <--
+from tracker import Tracker, tracker_init, tracker_track
+from test import siamese_init, siamese_track, Custom_
+
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
 parser.add_argument('--resume', default='', type=str, required=True,
@@ -38,20 +30,25 @@ if __name__ == '__main__':
 
     # Setup Model
     cfg = load_config(args)
-    siammask = Custom_(anchors=cfg['anchors'])
+    p = TrackerConfig()
+    p.renew()
+    siammask = Tracker(p=p, anchors=cfg['anchors'])
     if args.resume:
         assert isfile(args.resume), 'Please download {} first.'.format(args.resume)
         siammask = load_pretrain(siammask, args.resume)
-
     siammask.eval().to(device)
 
+    # Setup Original Model
+    siammask0 = Custom_(anchors=cfg['anchors'])
+    siammask0 = load_pretrain(siammask0, args.resume)
+    siammask0.eval().to(device)
+    
     # Parse Image file
     img_files = sorted(glob.glob(join(args.base_path, '*.jp*')))
     ims = [cv2.imread(imf) for imf in img_files]
 
     # Select ROI
     cv2.namedWindow("SiamMask", cv2.WND_PROP_FULLSCREEN)
-    # cv2.setWindowProperty("SiamMask", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     x, y, w, h = 305, 112, 163, 253
     if args.gt_file:
         with open(args.base_path + '/../' + args.gt_file, "r") as f:
@@ -73,22 +70,31 @@ if __name__ == '__main__':
         if f == 0:  # init
             target_pos = np.array([x + w / 2, y + h / 2])
             target_sz = np.array([w, h])
-            state = siamese_init(im, target_pos, target_sz, siammask, cfg['hp'], device=device)  # init tracker
+            state = tracker_init(im, target_pos, target_sz, siammask, device=device)  # init tracker
             state['gts'] = gts
             state['device'] = device
+            # init original model
+            state0 = siamese_init(im, target_pos, target_sz, siammask0, cfg['hp'], device=device)  # init tracker
+            state0['gts'] = gts
+            state0['device'] = device
+
         elif f > 0:  # tracking
-            state = siamese_track(state, im, mask_enable=False, refine_enable=True, device=device)  # track
-            # location = state['ploygon'].flatten()
-            # mask = state['mask'] > state['p'].seg_thr
-            # im[:, :, 2] = (mask > 0) * 255 + (mask == 0) * im[:, :, 2]
-            # cv2.polylines(im, [np.int0(location).reshape((-1, 1, 2))], True, (0, 255, 0), 3)
+            im_copy = im.copy()
+            state = tracker_track(state, im, siammask, device=device)  # track
             target_pos, target_sz =state['target_pos'], state['target_sz']
             x, y = (target_pos - target_sz/2).astype(int)
             x2, y2 = (target_pos + target_sz/2).astype(int)
-            cv2.rectangle(im, (x, y), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(im, (x, y), (x2, y2), (0, 255, 0), 4)
+            # cv2.imshow('SiamMask', im)
+            # original tracking
+            state0 = siamese_track(state0, im_copy, mask_enable=False, refine_enable=True, device=device) 
+            target_pos, target_sz =state0['target_pos'], state0['target_sz']
+            x, y = (target_pos - target_sz/2).astype(int)
+            x2, y2 = (target_pos + target_sz/2).astype(int)
+            cv2.rectangle(im, (x, y), (x2, y2), (0, 0, 255), 4)
             cv2.imshow('SiamMask', im)
-            key = cv2.waitKey(1)
-            if key > 0:
+            key = cv2.waitKey(0)
+            if key == ord('q'):
                 break
 
         toc += cv2.getTickCount() - tic

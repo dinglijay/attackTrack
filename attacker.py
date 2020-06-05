@@ -3,6 +3,8 @@ from utils.anchors import Anchors
 from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, corner2center, center2corner
 from models.siammask_sharp import select_cross_entropy_loss, get_cls_loss, weight_l1_loss
+from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp
+import test
 
 from torch.autograd import Variable
 from torchvision import transforms
@@ -10,10 +12,10 @@ import torch.nn.functional as F
 import torch
 
 import cv2
+import kornia
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from matplotlib.colors import Normalize
 
 from collections import namedtuple
 Corner = namedtuple('Corner', 'x1 y1 x2 y2')
@@ -22,10 +24,10 @@ Center = namedtuple('Center', 'x y w h')
 
 class AttackWrapper(object):
 
-    def __init__(self, x_crop, state, scale_x):
+    def __init__(self, x_crop, state, scale_x, s_x):
 
         self.x_crop = x_crop
-        self.template = state['template']
+        self.s_x = s_x
 
         self.state = state
         self.model = state['net']
@@ -39,33 +41,42 @@ class AttackWrapper(object):
             return self.gen_xcrop()
         
     def gen_template(self):
-        num_iters = 200
-        adam_lr = 500
-        mu, sigma = 127, 10
-
+        num_iters = 100
+        adam_lr = 300
+        mu, sigma = 127, 5
         label_thr_iou = 0.3
+        pert_sz_ratio = (0.3, 0.3)
 
-        track_res, score_res, pscore_res = self.get_tracking_result(self.template)
+        # Load state
+        state = self.state
+        device = state['device']
+        p = state['p']
+        s_z = state['s_z']
+        
+        # Get imgs and mask tensor
+        im_shape = state['im'].shape[0:2]
+        bbox_pert_temp = scale_bbox(state['gts'][0], pert_sz_ratio)
+        bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
+        mask_template = get_bbox_mask(shape=im_shape, bbox=bbox_pert_temp, mode='tensor').to(device)
+        mask_xcrop = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
+        im_template = kornia.image_to_tensor(state['first_im']).to(device)
+        im_xcrop = kornia.image_to_tensor(state['im']).to(device)
+
+        # Get Label
+        track_res, score_res, pscore_res = self.get_tracking_result(state['template'], self.x_crop)
         labels = self.get_label(track_res, thr_iou=label_thr_iou, need_iou=True)
-        mask = torch.from_numpy(circle_mask()).cuda().permute(2,0,1).unsqueeze(dim=0)
-        self.state['mask_255'] = mask_255 = F.pad(mask, pad=(64,64,64,64))
 
-        pert = (mu + sigma * torch.randn_like(self.template)).clamp(0,255)
-        pert = torch.tensor(pert, device='cuda', requires_grad=True)
+        pert = (mu + sigma * torch.randn_like(mask_template)).clamp(0,255)
+        pert = torch.tensor(pert, requires_grad=True)
         optimizer = torch.optim.Adam([pert], lr=adam_lr)
         for i in range(num_iters):
+            im_pert_template = im_template * (1-mask_template) + pert * mask_template
+            im_pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
+            im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
 
-            pert_255 = F.pad(pert*mask, pad=(64,64,64,64))
-            template = self.template*(1-mask) + pert*mask
-            x_crop = self.x_crop*(1-mask_255) + pert_255*mask_255
-
-            # fig, ax = plt.subplots(1,2,num='x_crop & template')
-            # ax[0].set_title('template')
-            # ax[0].imshow(template.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
-            # ax[1].set_title('x_crop')
-            # ax[1].imshow(x_crop.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
-            # plt.pause(0.01)
-            
+            template = test.get_subwindow_tracking_(im_pert_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
+            x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+           
             score, delta = self.model.track(x_crop, template)
             loss = -self.loss2(score, delta, pscore_res, labels)
             optimizer.zero_grad()
@@ -73,24 +84,73 @@ class AttackWrapper(object):
             optimizer.step()
             pert.data = (pert.data).clamp(0, 255)
 
-        state = self.state
-        state['pert'] = pert.detach()*mask
-        state['pert_255'] = F.pad(pert.detach()*mask, pad=(64,64,64,64))
-        state['tem_pert'] = (self.template.detach()*(1-mask) + state['pert']).clamp(0, 255)
-        state['xcrop_pert'] =self.x_crop*(1-mask_255) + pert_255*mask_255
-        
+            # fig, ax = plt.subplots(1,2,num='x_crop & template')
+            # ax[0].set_title('template')
+            # ax[0].imshow(kornia.tensor_to_image(template.byte()))
+            # ax[1].set_title('x_crop')
+            # ax[1].imshow(kornia.tensor_to_image(x_crop.byte()))
+            # plt.pause(0.01)
+
+        im_pert_template = im_template * (1-mask_template) + pert * mask_template
+        im_pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
+        im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
+
+        template = test.get_subwindow_tracking_(im_pert_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
+        x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+
+        state['im_pert_template'] = im_pert_template
+        state['pert_template'] = template
+        state['pert_sz_ratio'] = pert_sz_ratio
+       
         # self.show_label(labels, track_res)
         self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
         plt.show()
 
-        return state['tem_pert'], state['xcrop_pert']
+        return template, x_crop
 
     def gen_xcrop(self):
         state = self.state
-        mask_255 = state['mask_255']
-        pert_255 = state['pert_255']
-        state['xcrop_pert'] =self.x_crop*(1-mask_255) + pert_255*mask_255
-        return state['tem_pert'], state['xcrop_pert']
+
+        im_pert_template = state['im_pert_template']
+        pert_sz_ratio = state['pert_sz_ratio']
+        p = state['p']
+
+        im_shape = state['im'].shape[0:2]
+        bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
+        mask_xcrop = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(state['device'])
+
+        bbox_pert_temp = scale_bbox(state['gts'][0], pert_sz_ratio)
+        bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
+        im_pert_warped = warp(im_pert_template, bbox_pert_temp, bbox_pert_xcrop)
+        im_xcrop = kornia.image_to_tensor(state['im']).to(state['device'])
+        im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
+
+        x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+
+        cv2.imshow('template', kornia.tensor_to_image(state['pert_template'].byte()))
+        cv2.imshow('template1', kornia.tensor_to_image(state['template'].byte()))
+        cv2.imshow('x_crop', kornia.tensor_to_image(x_crop.byte()))
+        cv2.imshow('x_crop1', kornia.tensor_to_image(self.x_crop.byte()))
+        cv2.waitKey(1)
+
+        
+        return state['pert_template'], x_crop
+
+    def get_crop_box(self):
+        state = self.state
+        p = state['p']
+        x, y, w, h = state['gts'][state['n_frame']]
+        target_pos = np.array([x + w / 2, y + h / 2])
+        target_sz = np.array([w, h])
+        wc_x = target_sz[1] + p.context_amount * sum(target_sz)
+        hc_x = target_sz[0] + p.context_amount * sum(target_sz)
+        s_x = np.sqrt(wc_x * hc_x)
+        scale_x = p.exemplar_size / s_x
+        d_search = (p.instance_size - p.exemplar_size) / 2
+        pad = d_search / scale_x
+        s_x = s_x + 2 * pad
+        crop_box = [target_pos[0] - round(s_x) / 2, target_pos[1] - round(s_x) / 2, round(s_x), round(s_x)]
+        return tuple(map(int, crop_box))
 
     def get_tracking_result(self, template, x_crop=None):
         p = self.state['p']
@@ -195,11 +255,11 @@ class AttackWrapper(object):
         score = score.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
         # clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
         clss_pred = F.log_softmax(score, dim=4).view(-1,2)
-        loss_clss = F.nll_loss(clss_pred, clss_label)
+        # loss_clss = F.nll_loss(clss_pred, clss_label)
         
         pred_pos = torch.index_select(clss_pred, 0, pos)
         pred_neg = torch.index_select(clss_pred, 0, neg)
-        # loss_clss = torch.max(pred_neg) - torch.mean(pred_pos)
+        loss_clss = torch.max(pred_neg) - torch.mean(pred_pos)
 
         ######################################   
         deltas_pred = delta.view(4,-1)
@@ -211,10 +271,9 @@ class AttackWrapper(object):
                         torch.max(pred_neg).cpu().data.numpy(),\
                         loss_clss.cpu().data.numpy(),\
                         loss_delta.cpu().data.numpy()))
-
+        return loss_delta
         return loss_clss + loss_delta
         
-
     def show_label(self, labels, gt_bbox):
         clss, _, ious = labels
 
@@ -297,28 +356,6 @@ def sz_wh(wh):
     sz2 = (wh[0] + pad) * (wh[1] + pad)
     return np.sqrt(sz2)
 
-def circle_mask(shape=(127,127), loc=(64,64), diameter=12, sharpness=40):
-  """Return a circular mask of a given shape"""
-
-  x1 = loc[0]-diameter
-  y1 = loc[1]-diameter
-  x2 = loc[0]+diameter
-  y2 = loc[1]+diameter
-  assert x1>=0 and y1>=0 and x2<=shape[0] and y2<=shape[1]
-
-  x = np.linspace(-1, 1, 2*diameter)
-  y = np.linspace(-1, 1, 2*diameter)
-  xx, yy = np.meshgrid(x, y, sparse=True)
-  z = (xx**2 + yy**2) ** sharpness
-  circle = 1 - np.clip(z, -1, 1)
-  
-  mask = np.zeros(shape)
-  mask[x1:x2, y1:y2] = circle
-  mask = np.expand_dims(mask, axis=2)
-  mask = np.broadcast_to(mask, (shape[0],shape[1],3)).astype(np.float32)
-  
-  return mask
-
 def get_bbox_in_searchWindow(orig_w, orig_h, target_wh, patch_wh):
 
     w = int(orig_w * patch_wh / target_wh)
@@ -333,9 +370,7 @@ if __name__ == "__main__":
     import matplotlib.patches as patches
     import numpy as np
 
-    from tools.test import get_subwindow_tracking
-
-    img = cv2.imread('data/tennis/00000.jpg')
+    img = cv2.imread('../SiamMask/data/tennis/00000.jpg')
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img_h, img_w = img.shape[0:2]
     x, y, w, h = 305, 112, 163, 253
@@ -343,7 +378,7 @@ if __name__ == "__main__":
     # crop the search region -> z_crop
     target_pos = np.array([x + w / 2, y + h / 2])
     target_sz = np.array([w, h])
-    avg_chans = np.mean(img, axis=(0, 1))
+    avg_chans = np.mean(img)
 
     wc_x = target_sz[0] + 0.5 * sum(target_sz)
     hc_x = target_sz[1] + 0.5 * sum(target_sz)
@@ -354,28 +389,25 @@ if __name__ == "__main__":
     pad = d_search / scale_x
     s_x = s_x + 2 * pad
 
-    z_crop = get_subwindow_tracking(img, target_pos, 255, s_x, avg_chans, out_mode='numpy')
+    z_crop = test.get_subwindow_tracking_(img, target_pos, 255, s_x, avg_chans)
     plt.figure()
-    ax = plt.subplot(121)
-    ax.imshow(z_crop)
-
-    # add bbox to search region
+    ax = plt.subplot(221)
+    ax.imshow(z_crop.astype(int))
     x_, y_, w_, h_ = get_bbox_in_searchWindow(w, h, s_x, 255)
     rect = patches.Rectangle((x_,y_),w_,h_,linewidth=1,edgecolor='r',facecolor='none')
     ax.add_patch(rect)
-
-    ##
-    aw = AttackWrapper()
-    scores, _, _ =aw.get_target_label(bbox=Corner(x_, y_, x_+w_, y_+h_))
-    print(scores.shape)
-    print(aw.anchors.all_anchors[0].shape)
-
-    idx = np.argmax(scores.reshape(-1))
-    bbox = aw.anchors.all_anchors[0].reshape(4,-1)[:,idx]
-    x, y, x2, y2 = bbox
-    ax = plt.subplot(122)
-    ax.imshow(z_crop)
-    rect = patches.Rectangle((x,y),x2-x,y2-y,linewidth=1,edgecolor='r',facecolor='none')
+    
+    ax = plt.subplot(222)
+    ax.imshow(img)
+    rect = patches.Rectangle((x,y),w,h,linewidth=1,edgecolor='r',facecolor='none')
     ax.add_patch(rect)
+
+    mask = circle_mask(shape=img.shape[0:2], loc=target_pos.astype(int), diameter=int(target_sz.min()/5))
+    ax = plt.subplot(223)
+    ax.imshow(mask)
+
+    mask 
+    ax = plt.subplot(224)
+    ax.imshow
 
     plt.show()
