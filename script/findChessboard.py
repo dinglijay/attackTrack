@@ -19,7 +19,7 @@ def findChessboard(img, cnrx, cnry):
 
     return ret, corners 
 
-def main(img_root, save_fpath=None, display=True):
+def main(img_root, save_fpath=None, display=True, cnrx =5, cnry=7):
     im_names = sorted(glob.glob(join(img_root, '*.jp*')))
 
     if save_fpath:
@@ -27,7 +27,6 @@ def main(img_root, save_fpath=None, display=True):
     for im_name in im_names:
         print(im_name)
         img = cv2.imread(im_name)
-        cnrx, cnry = 7, 5
         ret, corners = findChessboard(img, cnrx=cnrx, cnry=cnry)
 
         if save_fpath:
@@ -42,9 +41,10 @@ def main(img_root, save_fpath=None, display=True):
             cv2.waitKey(1)
 
     if save_fpath:
-        data = {'ret': np.array(ret), 'corners': np.array(corners)}
+        data = {'ret': np.array(data_ret), 'corners': np.array(data_corners)}
         with open(save_fpath, 'wb') as f:
             pickle.dump(data, f)
+            print('Results saved in ', save_fpath)
 
 
 if __name__ == '__main__':

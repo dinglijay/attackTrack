@@ -85,7 +85,7 @@ if __name__ == '__main__':
             target_pos, target_sz =state['target_pos'], state['target_sz']
             x, y = (target_pos - target_sz/2).astype(int)
             x2, y2 = (target_pos + target_sz/2).astype(int)
-            cv2.rectangle(im, (x, y), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(im, (x, y), (x2, y2), (0, 255, 0), 4)
             cv2.imshow('SiamMask', im)
             key = cv2.waitKey(1)
             if key > 0:
