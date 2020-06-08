@@ -44,8 +44,8 @@ class AttackWrapper(object):
         num_iters = 100
         adam_lr = 300
         mu, sigma = 127, 5
-        label_thr_iou = 0.3
-        pert_sz_ratio = (0.3, 0.3)
+        label_thr_iou = 0.01
+        pert_sz_ratio = (0.6, 0.3)
 
         # Load state
         state = self.state
@@ -127,11 +127,11 @@ class AttackWrapper(object):
 
         x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
 
-        cv2.imshow('template', kornia.tensor_to_image(state['pert_template'].byte()))
-        cv2.imshow('template1', kornia.tensor_to_image(state['template'].byte()))
-        cv2.imshow('x_crop', kornia.tensor_to_image(x_crop.byte()))
-        cv2.imshow('x_crop1', kornia.tensor_to_image(self.x_crop.byte()))
-        cv2.waitKey(1)
+        # cv2.imshow('template', kornia.tensor_to_image(state['pert_template'].byte()))
+        # cv2.imshow('template1', kornia.tensor_to_image(state['template'].byte()))
+        # cv2.imshow('x_crop', kornia.tensor_to_image(x_crop.byte()))
+        # cv2.imshow('x_crop1', kornia.tensor_to_image(self.x_crop.byte()))
+        # cv2.waitKey(1)
 
         
         return state['pert_template'], x_crop
@@ -183,8 +183,8 @@ class AttackWrapper(object):
 
         res_cx = int(pred_in_crop[0] + 127)
         res_cy = int(pred_in_crop[1] + 127)
-        res_w = int(target_sz[0] * (1 - lr) + pred_in_crop[2] * lr)
-        res_h = int(target_sz[1] * (1 - lr) + pred_in_crop[3] * lr)
+        res_w = int(target_sz_in_crop[0] * (1 - lr) + pred_in_crop[2] * lr)
+        res_h = int(target_sz_in_crop[1] * (1 - lr) + pred_in_crop[3] * lr)
 
         return (res_cx, res_cy, res_w, res_h), score, pscore
     
@@ -255,11 +255,11 @@ class AttackWrapper(object):
         score = score.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
         # clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
         clss_pred = F.log_softmax(score, dim=4).view(-1,2)
-        # loss_clss = F.nll_loss(clss_pred, clss_label)
+        loss_clss = F.nll_loss(clss_pred, clss_label)
         
         pred_pos = torch.index_select(clss_pred, 0, pos)
         pred_neg = torch.index_select(clss_pred, 0, neg)
-        loss_clss = torch.max(pred_neg) - torch.mean(pred_pos)
+        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
 
         ######################################   
         deltas_pred = delta.view(4,-1)
@@ -271,7 +271,8 @@ class AttackWrapper(object):
                         torch.max(pred_neg).cpu().data.numpy(),\
                         loss_clss.cpu().data.numpy(),\
                         loss_delta.cpu().data.numpy()))
-        return loss_delta
+        # return loss_delta
+        return loss_clss
         return loss_clss + loss_delta
         
     def show_label(self, labels, gt_bbox):
