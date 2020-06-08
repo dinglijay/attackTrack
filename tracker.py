@@ -10,9 +10,9 @@ class SubWindow(torch.nn.Module):
     """
     Crop image at pos with size_wh: Croppping + Padding + Resizing.
     Forward Input:
-        im: input images, torch.tensor of shape ([B,], C, H, W)
-        pos: crop postions, torch.tensor of shape ([B,], 2)
-        size_wh: crop sizes, torch.tensor of shape ([B,], )
+        im: input images, torch.tensor of shape ([B,] C, H, W)
+        pos: crop postions, torch.tensor of shape ([B,] 2)
+        size_wh: crop sizes, torch.tensor of shape ([B,] )
         out_size: 127 or 255
     Forward Output:
         cropped images (B, C, model_sz, model_sz)
@@ -66,11 +66,11 @@ class SubWindow(torch.nn.Module):
 
 class PenaltyLayer(torch.nn.Module):
     '''
+    Penal size change and moving
     Forward Input:
-        score: (N, 10, 25, 25)
-        delta: (N, 20, 25, 25)
-        target_sz: np.array (2,)
-        scale_x: float
+        score: (B, 10, 25, 25)
+        delta: (B, 20, 25, 25)
+        target_sz: (B, 2)
     Forward Output:
         
     '''
@@ -88,7 +88,10 @@ class PenaltyLayer(torch.nn.Module):
         window = np.tile(window.flatten(), p.anchor_num)
         self.window = torch.nn.Parameter(torch.from_numpy(window), requires_grad=False)
 
-    def forward(self, score, delta, target_sz, scale_x):
+        self.context_amount = p.context_amount
+        self.exemplar_size = p.exemplar_size
+
+    def forward(self, score, delta, target_sz):
         B = score.shape[0]
         delta = delta.view(B, 4, -1)
         score = F.softmax(score.view(B, 2, -1), dim=1)[:,1]
@@ -112,18 +115,33 @@ class PenaltyLayer(torch.nn.Module):
             sz2 = (wh[0] + pad) * (wh[1] + pad)
             return torch.sqrt(sz2)
 
-        # size penalty      
+        # size penalty
+        scale_x = self.get_scale_x(target_sz)
         target_sz_in_crop = (target_sz*scale_x).clone().detach().split(1)
         s_c = change(sz(delta[:, 2, :], delta[:, 3, :]) / (sz_wh(target_sz_in_crop)))  # scale penalty
         r_c = change((target_sz_in_crop[0] / target_sz_in_crop[1]) / (delta[:, 2, :] / delta[:, 3, :]))  # ratio penalty
 
         penalty = torch.exp(-(r_c * s_c - 1) * self.penalty_k)
-        penalty_score = penalty * score
+        size_pscore = penalty * score
 
         # cos window (motion model)
-        pscore = penalty_score * (1 - self.window_influence) + self.window * self.window_influence
+        pscore = size_pscore * (1 - self.window_influence) + self.window * self.window_influence
 
-        return pscore, delta, penalty_score
+        return pscore, delta, size_pscore
+
+    def get_scale_x(self, target_sz):
+        device = target_sz.device
+        target_sz = target_sz.cpu().numpy()
+        
+        if len(target_sz.shape) == 1:
+            target_sz = np.expand_dims(target_sz, axis=0)
+
+        wc = target_sz[:,0] + self.context_amount * target_sz.sum(axis=1)
+        hc = target_sz[:,1] + self.context_amount * target_sz.sum(axis=1)
+        crop_sz = np.sqrt(wc * hc).round() 
+        scale_x = self.exemplar_size / crop_sz
+
+        return torch.from_numpy(scale_x).requires_grad_(False).to(device)
 
 
 class Tracker(Custom):
@@ -139,16 +157,36 @@ class Tracker(Custom):
         all_anchors = self.anchor.all_anchors[1].reshape(4, -1).transpose(1, 0)
         self.all_anchors = torch.from_numpy(all_anchors).float()
 
+    def get_crop_sz(self, target_sz, is_search=False):
+        device = target_sz.device
+        target_sz = target_sz.cpu().numpy()
+
+        if len(target_sz.shape) == 1:
+            target_sz = np.expand_dims(target_sz, axis=0)
+
+        wc = target_sz[:,0] + self.p.context_amount * target_sz.sum(axis=1)
+        hc = target_sz[:,1] + self.p.context_amount * target_sz.sum(axis=1)
+        crop_sz = np.sqrt(wc * hc).round() 
+
+        if is_search:
+            scale_x = self.p.exemplar_size / crop_sz
+            d_search = (self.p.instance_size - self.p.exemplar_size) / 2
+            pad = d_search / scale_x
+            crop_sz = crop_sz + 2 * pad
+
+        return torch.from_numpy(crop_sz).requires_grad_(False).to(device)
+
     def template(self, template_img, template_pos, template_sz):
-        template = self.get_subwindow(template_img, template_pos, template_sz, out_size=self.p.exemplar_size)
+        crop_sz = self.get_crop_sz(template_sz)
+        template = self.get_subwindow(template_img, template_pos, crop_sz, out_size=self.p.exemplar_size)
         self.zf = self.features(template)
 
-    def track(self, search_img, search_pos, search_sz, target_sz, scale_x ):
-        search = self.get_subwindow(search_img, search_pos, search_sz, out_size=self.p.instance_size)
+    def track(self, search_img, target_pos, target_sz):
+        crop_sz = self.get_crop_sz(target_sz, is_search=True)
+        search = self.get_subwindow(search_img, target_pos, crop_sz, out_size=self.p.instance_size)
         search = self.features(search)
         rpn_pred_cls, rpn_pred_loc = self.rpn(self.zf, search)
-        score, delta, penalty_score = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz, scale_x)
-
+        score, delta, penalty_score = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz)
         return score, delta, penalty_score
 
 
@@ -157,14 +195,10 @@ def tracker_init(im, target_pos, target_sz, model, device='cpu'):
     state['im_h'] = im.shape[0]
     state['im_w'] = im.shape[1]
  
-    wc_z = target_sz[0] + model.p.context_amount * sum(target_sz)
-    hc_z = target_sz[1] + model.p.context_amount * sum(target_sz)
-    s_z = round(np.sqrt(wc_z * hc_z))
-
     # initialize the exemplar
     model.template(kornia.image_to_tensor(im).to(device).float(), 
                    torch.from_numpy(target_pos).to(device),
-                   torch.tensor(s_z, device=device))
+                   torch.from_numpy(target_sz).to(device) )
     
     state['target_pos'] = target_pos
     state['target_sz'] = target_sz
@@ -180,17 +214,11 @@ def tracker_track(state, im, model, device='cpu', debug=False):
     wc_x = target_sz[1] + p.context_amount * sum(target_sz)
     hc_x = target_sz[0] + p.context_amount * sum(target_sz)
     s_x = np.sqrt(wc_x * hc_x)
-
     scale_x = p.exemplar_size / s_x
-    d_search = (p.instance_size - p.exemplar_size) / 2
-    pad = d_search / scale_x
-    s_x = s_x + 2 * pad
 
     pscore, delta, penalty_score = model.track(kornia.image_to_tensor(im).to(device).float(),
                                                 torch.from_numpy(target_pos).to(device),
-                                                torch.tensor(s_x, device=device),
-                                                torch.tensor(target_sz, device=device),
-                                                torch.tensor(scale_x, device=device))
+                                                torch.from_numpy(target_sz).to(device))
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
 
