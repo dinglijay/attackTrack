@@ -12,7 +12,7 @@ from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, tracker_init, tracker_track
-from data.attack_dataset import AttackDataset
+from attack_dataset import AttackDataset
 
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
