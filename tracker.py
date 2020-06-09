@@ -122,12 +122,12 @@ class PenaltyLayer(torch.nn.Module):
         r_c = change((target_sz_in_crop[0] / target_sz_in_crop[1]) / (delta[:, 2, :] / delta[:, 3, :]))  # ratio penalty
 
         penalty = torch.exp(-(r_c * s_c - 1) * self.penalty_k)
-        size_pscore = penalty * score
+        pscore_size = penalty * score
 
         # cos window (motion model)
-        pscore = size_pscore * (1 - self.window_influence) + self.window * self.window_influence
+        pscore = pscore_size * (1 - self.window_influence) + self.window * self.window_influence
 
-        return pscore, delta, size_pscore
+        return pscore, delta, pscore_size
 
     def get_scale_x(self, target_sz):
         device = target_sz.device
@@ -178,16 +178,16 @@ class Tracker(Custom):
 
     def template(self, template_img, template_pos, template_sz):
         crop_sz = self.get_crop_sz(template_sz)
-        template = self.get_subwindow(template_img, template_pos, crop_sz, out_size=self.p.exemplar_size)
-        self.zf = self.features(template)
+        self.template_cropped = self.get_subwindow(template_img, template_pos, crop_sz, out_size=self.p.exemplar_size)
+        self.zf = self.features(self.template_cropped)
 
     def track(self, search_img, target_pos, target_sz):
         crop_sz = self.get_crop_sz(target_sz, is_search=True)
-        search = self.get_subwindow(search_img, target_pos, crop_sz, out_size=self.p.instance_size)
-        search = self.features(search)
+        self.search_cropped = self.get_subwindow(search_img, target_pos, crop_sz, out_size=self.p.instance_size)
+        search = self.features(self.search_cropped)
         rpn_pred_cls, rpn_pred_loc = self.rpn(self.zf, search)
-        score, delta, penalty_score = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz)
-        return score, delta, penalty_score
+        pscore, delta, pscore_size = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz)
+        return pscore, delta, pscore_size
 
 
 def tracker_init(im, target_pos, target_sz, model, device='cpu'):
@@ -216,14 +216,14 @@ def tracker_track(state, im, model, device='cpu', debug=False):
     s_x = np.sqrt(wc_x * hc_x)
     scale_x = p.exemplar_size / s_x
 
-    pscore, delta, penalty_score = model.track(kornia.image_to_tensor(im).to(device).float(),
+    pscore, delta, pscore_size = model.track(kornia.image_to_tensor(im).to(device).float(),
                                                 torch.from_numpy(target_pos).to(device),
                                                 torch.from_numpy(target_sz).to(device))
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
 
     pred_in_crop = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] / scale_x
-    lr = penalty_score.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
+    lr = pscore_size.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
 
     res_x = pred_in_crop[0] + target_pos[0]
     res_y = pred_in_crop[1] + target_pos[1]

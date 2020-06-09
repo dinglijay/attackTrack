@@ -26,21 +26,21 @@ parser.add_argument('--cpu', action='store_true', help='cpu mode')
 args = parser.parse_args()
 
 
-def bbox_to_certer(bbox):
+def bbox2center_sz(bbox):
     x, y, w, h = bbox
     pos = np.array([x + w / 2, y + h / 2])
     sz = np.array([w, h])
     return pos, sz
 
 def track(model, p, template_img, template_bbox, search_img, search_bbox):
-    pos_z, size_z = bbox_to_certer(template_bbox)
-    pos_x, size_x = bbox_to_certer(search_bbox)
+    pos_z, size_z = bbox2center_sz(template_bbox)
+    pos_x, size_x = bbox2center_sz(search_bbox)
 
     model.template(kornia.image_to_tensor(template_img).to(device).float(), 
                    torch.from_numpy(pos_z).to(device),
                    torch.from_numpy(size_z).to(device))
 
-    pscore, delta, penalty_score = model.track(kornia.image_to_tensor(search_img).to(device).float(),
+    pscore, delta, pscore_size = model.track(kornia.image_to_tensor(search_img).to(device).float(),
                                                 torch.from_numpy(pos_x).to(device),
                                                 torch.from_numpy(size_x).to(device))
 
@@ -50,13 +50,13 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
 
-    pred_in_crop = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] / scale_x
-    lr = penalty_score.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
+    pred_in_img = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] / scale_x
+    lr = pscore_size.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
 
-    res_x = pred_in_crop[0] + pos_x[0]
-    res_y = pred_in_crop[1] + pos_x[1]
-    res_w = size_x[0] * (1 - lr) + pred_in_crop[2] * lr
-    res_h = size_x[1] * (1 - lr) + pred_in_crop[3] * lr
+    res_x = pred_in_img[0] + pos_x[0]
+    res_y = pred_in_img[1] + pos_x[1]
+    res_w = size_x[0] * (1 - lr) + pred_in_img[2] * lr
+    res_h = size_x[1] * (1 - lr) + pred_in_img[3] * lr
 
     target_pos = np.array([res_x, res_y])
     target_sz = np.array([res_w, res_h])
