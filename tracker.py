@@ -189,6 +189,11 @@ class Tracker(Custom):
         pscore, delta, pscore_size = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz)
         return pscore, delta, pscore_size
 
+def bbox2center_sz(bbox):
+    x, y, w, h = bbox.split(1, dim=1)
+    pos = torch.cat([x+w/2, y+h/2], dim=1)
+    sz = torch.cat([w, h], dim=1)
+    return pos, sz
 
 def tracker_init(im, target_pos, target_sz, model, device='cpu'):
     state = dict()

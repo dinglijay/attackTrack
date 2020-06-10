@@ -11,7 +11,7 @@ from utils.config_helper import load_config
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
-from tracker import Tracker, tracker_init, tracker_track
+from tracker import Tracker, tracker_init, tracker_track, bbox2center_sz
 from attack_dataset import AttackDataset
 
 
@@ -25,12 +25,6 @@ parser.add_argument('--gt_file', default=None, type=str, help='ground truth txt 
 parser.add_argument('--cpu', action='store_true', help='cpu mode')
 args = parser.parse_args()
 
-
-def bbox2center_sz(bbox):
-    x, y, w, h = bbox.split(1, dim=1)
-    pos = torch.cat([x+w/2, y+h/2], dim=1)
-    sz = torch.cat([w, h], dim=1)
-    return pos, sz
 
 def track(model, p, template_img, template_bbox, search_img, search_bbox):
     pos_z, size_z = bbox2center_sz(template_bbox)
@@ -47,7 +41,7 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
     scale_x = model.penalty.get_scale_x(size_x)
 
     assert pscore.shape[0]==1
-    list(map(lambda x: x.squeeze_(), [pos_x,size_x, template_bbox, search_bbox]))
+    list(map(lambda x: x.squeeze_().numpy(), [pos_x,size_x, template_bbox, search_bbox]))
     template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
     search_img = np.ascontiguousarray(kornia.tensor_to_image(search_img.byte()))
 
