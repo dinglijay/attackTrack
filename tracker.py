@@ -111,15 +111,15 @@ class PenaltyLayer(torch.nn.Module):
             return torch.sqrt(sz2)
 
         def sz_wh(wh):
-            pad = (wh[0] + wh[1]) * 0.5
-            sz2 = (wh[0] + pad) * (wh[1] + pad)
+            pad = (wh[:,0] + wh[:,1]) * 0.5
+            sz2 = (wh[:,0] + pad) * (wh[:,1] + pad)
             return torch.sqrt(sz2)
 
         # size penalty
         scale_x = self.get_scale_x(target_sz)
-        target_sz_in_crop = (target_sz*scale_x).clone().detach().split(1)
-        s_c = change(sz(delta[:, 2, :], delta[:, 3, :]) / (sz_wh(target_sz_in_crop)))  # scale penalty
-        r_c = change((target_sz_in_crop[0] / target_sz_in_crop[1]) / (delta[:, 2, :] / delta[:, 3, :]))  # ratio penalty
+        target_sz_in_crop = (target_sz.T*scale_x).T.clone().detach()
+        s_c = change(sz(delta[:, 2, :], delta[:, 3, :]).T / sz_wh(target_sz_in_crop)).T # scale penalty
+        r_c = change((target_sz_in_crop[:,0] / target_sz_in_crop[:,1]) / (delta[:, 2, :] / delta[:, 3, :]).T).T # ratio penalty
 
         penalty = torch.exp(-(r_c * s_c - 1) * self.penalty_k)
         pscore_size = penalty * score
@@ -268,7 +268,7 @@ if __name__ == "__main__":
     pos = torch.tensor(gts[:,:2] + gts[:,2:]/2, device=device)
     sz = torch.tensor(gts[:,2:], device=device).max(dim=1)[0]
 
-    # test
+    # test SubWindow
     model = SubWindow()
     out = model(ims, pos, sz)
     for i in range(out.shape[0]):

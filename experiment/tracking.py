@@ -27,29 +27,31 @@ args = parser.parse_args()
 
 
 def bbox2center_sz(bbox):
-    x, y, w, h = bbox
-    pos = np.array([x + w / 2, y + h / 2])
-    sz = np.array([w, h])
+    x, y, w, h = bbox.split(1, dim=1)
+    pos = torch.cat([x+w/2, y+h/2], dim=1)
+    sz = torch.cat([w, h], dim=1)
     return pos, sz
 
 def track(model, p, template_img, template_bbox, search_img, search_bbox):
     pos_z, size_z = bbox2center_sz(template_bbox)
     pos_x, size_x = bbox2center_sz(search_bbox)
 
-    model.template(kornia.image_to_tensor(template_img).to(device).float(), 
-                   torch.from_numpy(pos_z).to(device),
-                   torch.from_numpy(size_z).to(device))
+    model.template(template_img.to(device),
+                   pos_z.to(device),
+                   size_z.to(device))
 
-    pscore, delta, pscore_size = model.track(kornia.image_to_tensor(search_img).to(device).float(),
-                                                torch.from_numpy(pos_x).to(device),
-                                                torch.from_numpy(size_x).to(device))
+    pscore, delta, pscore_size = model.track(search_img.to(device),
+                                             pos_x.to(device),
+                                             size_x.to(device))
 
-    wc_x = size_x[1] + p.context_amount * sum(size_x)
-    hc_x = size_x[0] + p.context_amount * sum(size_x)
-    scale_x = p.exemplar_size / np.sqrt(wc_x * hc_x)
+    scale_x = model.penalty.get_scale_x(size_x)
+
+    assert pscore.shape[0]==1
+    list(map(lambda x: x.squeeze_(), [pos_x,size_x, template_bbox, search_bbox]))
+    template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
+    search_img = np.ascontiguousarray(kornia.tensor_to_image(search_img.byte()))
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
-
     pred_in_img = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] / scale_x
     lr = pscore_size.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
 
@@ -97,15 +99,16 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataset = AttackDataset()
+    dataloader = DataLoader(AttackDataset(), batch_size=150)
 
     cv2.namedWindow("SiamMask", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
 
     bbox = None
-    for data in dataset:
-        template_img, template_bbox, search_img, search_bbox = data
-        if bbox: search_bbox = bbox
-        bbox = track(model, p, template_img, template_bbox, search_img, search_bbox)
+    for data in dataloader:
+        data = list(map(lambda x: x.split(1), data))
+        for template_img, template_bbox, search_img, search_bbox in zip(*data):
+            if bbox: search_bbox = torch.tensor(bbox).unsqueeze_(dim=0)
+            bbox = track(model, p, template_img, template_bbox, search_img, search_bbox)
 
     

@@ -2,8 +2,8 @@ import cv2
 import glob
 import pickle
 from os.path import join
-
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
 
 
 class AttackDataset(Dataset):
@@ -27,31 +27,39 @@ class AttackDataset(Dataset):
         self.transform = transform
 
     def __len__(self):
-        return len(self.img_names)
+        return len(self.img_names)-1
 
     def __getitem__(self, idx):
-
-        print(idx)
-
-        template_img = cv2.imread(self.img_names[0]) 
-        template_bbox = self.bbox[0]
-        search_img = cv2.imread(self.img_names[idx+1])
-        search_bbox = self.bbox[idx]
+        template_idx = 0
         
+        template_img = np.transpose(cv2.imread(self.img_names[template_idx]), (2, 0, 1)).astype(np.float32)
+        search_img = np.transpose(cv2.imread(self.img_names[idx+1]), (2, 0, 1)).astype(np.float32)
+        template_bbox = np.array(self.bbox[template_idx])
+        search_bbox = np.array(self.bbox[idx])
+       
         return template_img, template_bbox, search_img, search_bbox
 
 if __name__ =='__main__':
+    import kornia
 
-    data = AttackDataset()
-    template_img, template_bbox, search_img, search_bbox = iter(data).__next__()
+    dataset = AttackDataset()
+    dataloader = DataLoader(dataset, batch_size=20)
 
-    x, y, w, h = template_bbox
-    cv2.rectangle(template_img, (x, y), (x+w, y+h), (0, 255, 0), 4)
-    cv2.imshow('template', template_img)
-    cv2.waitKey(1)
+    cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
+    cv2.namedWindow("search", cv2.WND_PROP_FULLSCREEN)
 
-    x, y, w, h = search_bbox
-    cv2.rectangle(search_img, (x, y), (x+w, y+h), (0, 0, 255), 4)
-    cv2.imshow('search', search_img)
+    for data in dataloader:
+        data = list(map(lambda x: x.split(1), data))
+        for template_img, template_bbox, search_img, search_bbox in zip(*data):
+            x, y, w, h = template_bbox.squeeze()
+            template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
+            cv2.rectangle(template_img, (x, y), (x+w, y+h), (0, 255, 0), 4)
+            cv2.imshow('template', template_img)
+            cv2.waitKey(1)
 
-    cv2.waitKey(0)
+            x, y, w, h = search_bbox.squeeze()
+            search_img = np.ascontiguousarray(kornia.tensor_to_image(search_img.byte()))
+            cv2.rectangle(search_img, (x, y), (x+w, y+h), (0, 0, 255), 4)
+            cv2.imshow('search', search_img)
+
+            cv2.waitKey(1)
