@@ -5,6 +5,7 @@ import cv2
 import kornia
 import numpy as np
 from os.path import join, isdir, isfile
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from utils.config_helper import load_config
@@ -12,8 +13,8 @@ from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, corner2center, center2corner
 
-
-from tracker import Tracker, tracker_init, tracker_track
+from tracker import Tracker, bbox2center_sz
+from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp
 from attack_dataset import AttackDataset
 
 
@@ -29,6 +30,7 @@ args = parser.parse_args()
 
 
 class PatchTrainer(object):
+
     def __init__(self, args):
         super(PatchTrainer, self).__init__()
 
@@ -61,119 +63,193 @@ class PatchTrainer(object):
         pos_z, size_z = bbox2center_sz(template_bbox)
         pos_x, size_x = bbox2center_sz(search_bbox)
 
-        model.template(kornia.image_to_tensor(template_img).to(device).float(), 
-                       torch.from_numpy(pos_z).to(device),
-                       torch.from_numpy(size_z).to(device))
-        pscore, delta, pscore_size = model.track(kornia.image_to_tensor(search_img).to(device).float(),
-                                                   torch.from_numpy(pos_x).to(device),
-                                                   torch.from_numpy(size_x).to(device))    
+        model.template(template_img.to(device),
+                       pos_z.to(device),
+                       size_z.to(device))       
+        pscore, delta, pscore_size = model.track(search_img.to(device),
+                                                 pos_x.to(device),
+                                                 size_x.to(device))
         if out_layer == 'score':
             return pscore, delta, pscore_size
         elif out_layer == 'bbox':
-            wc_x = size_x[1] + p.context_amount * sum(size_x)
-            hc_x = size_x[0] + p.context_amount * sum(size_x)
-            scale_x = p.exemplar_size / np.sqrt(wc_x * hc_x)
+            scale_x = self.model.penalty.get_scale_x(size_x)
+            res_bbox = list()
+            for i in range(pscore.shape[0]):
+                best_pscore_id = pscore[i,...].argmax()
+                pred_in_crop = delta[i, :, best_pscore_id] # / scale_x
+                lr = pscore_size[i, best_pscore_id] * p.lr  # lr for OTB
+                target_sz_in_crop = size_x[i] * scale_x[i]
 
-            best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
-            pred_in_crop = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] # / scale_x
-            lr = pscore_size.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
+                res_cx = int(pred_in_crop[0] + 127)
+                res_cy = int(pred_in_crop[1] + 127)
+                res_w = int(target_sz_in_crop[0] * (1 - lr) + pred_in_crop[2] * lr)
+                res_h = int(target_sz_in_crop[1] * (1 - lr) + pred_in_crop[3] * lr)
+                res_x = int(res_cx - res_w / 2)
+                res_y = int(res_cy - res_h / 2)
+                res_bbox.append(((res_x, res_y, res_w, res_h)))
+            return pscore, delta, pscore_size, np.array(res_bbox)
+                        
+    def loss(self, pscore, labels):
 
-            target_sz_in_crop = size_x * scale_x
-            res_cx = int(pred_in_crop[0] + 127)
-            res_cy = int(pred_in_crop[1] + 127)
-            res_w = int(target_sz_in_crop[0] * (1 - lr) + pred_in_crop[2] * lr)
-            res_h = int(target_sz_in_crop[1] * (1 - lr) + pred_in_crop[3] * lr)
+        clss_label, deltas_label = labels
 
-            res_x = int(res_cx - res_w / 2)
-            res_y = int(res_cy - res_h / 2)
-            return pscore, delta, pscore_size, (res_x, res_y, res_w, res_h)
-            
+        clss_label = torch.from_numpy(clss_label).to(self.device)
+        # deltas_label = torch.tensor(deltas_label, device=self.device)
+
+        clss_pred = torch.log(torch.stack([pscore, 1-pscore], dim=2))
+        loss_clss = F.nll_loss(clss_pred.reshape(-1, 2), clss_label.reshape(-1))
+
+        print('Loss -> loss_clss: {:.2f}'.format(loss_clss.cpu().data.numpy()))
+
+        # pred_pos = torch.index_select(clss_pred, 0, pos)
+        # pred_neg = torch.index_select(clss_pred, 0, neg)
+        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
+
+        return loss_clss
+
+        ######################################
+        b, a2, h, w = pscore.shape
+        assert b==1
+        pscore = pscore.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
+        # clss_pred = F.softmax(pscore, dim=4).view(-1,2)[...,1]
+        clss_pred = F.log_softmax(pscore, dim=4).view(-1,2)
+        loss_clss = F.nll_loss(clss_pred, clss_label)
+        
+        pred_pos = torch.index_select(clss_pred, 0, pos)
+        pred_neg = torch.index_select(clss_pred, 0, neg)
+        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
+
+        ######################################   
+        deltas_pred = delta.view(4,-1)
+        diff = (deltas_pred - deltas_label).abs().sum(dim=0)
+        loss_delta = torch.index_select(diff, 0, pos).mean()
+
+        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.2f}'\
+                .format(torch.max(pred_pos).cpu().data.numpy(),\
+                        torch.max(pred_neg).cpu().data.numpy(),\
+                        loss_clss.cpu().data.numpy(),\
+                        loss_delta.cpu().data.numpy()))
+        return loss_clss + loss_delta
+    
     def attack(self):
+        device = self.device
 
         # Setup attacker cfg
         num_iters = 100
         adam_lr = 300
         mu, sigma = 127, 5
-        label_thr_iou = 0.3
+        label_thr_iou = 0.01
         pert_sz_ratio = (0.6, 0.3)
 
-        # tracking
-        data = next(iter(self.dataset))
-        template_img, template_bbox, search_img, search_bbox = data
-        pscore, delta, pscore_size, bbox = self.get_tracking_result(*data, out_layer='bbox')
+        # Load data
+        dataloader = DataLoader(self.dataset, batch_size=1)
+        data = next(iter(dataloader))
+        
+        # Move tensor to device
+        template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
-        # Label
+        # Tracking and Label
+        pscore, delta, pscore_size, bbox = self.get_tracking_result(*data, out_layer='bbox')
         labels = self.get_label(bbox, thr_iou=label_thr_iou, need_iou=True)
 
+        # Generate masks
+        im_shape = template_img.shape[2:]
+        bbox_pert_temp = scale_bbox(template_bbox, pert_sz_ratio)
+        bbox_pert_xcrop = scale_bbox(search_bbox, pert_sz_ratio)
+        mask_template = get_bbox_mask(shape=im_shape, bbox=bbox_pert_temp, mode='tensor').to(device)
+        mask_search = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
+        
+        # Iteratively opti pert
+        pert = (mu + sigma * torch.randn_like(mask_template)).clamp(0,255)
+        pert = pert.clone().detach().requires_grad_(True)
+        optimizer = torch.optim.Adam([pert], lr=adam_lr)
+        for i in range(num_iters):
+            pert_template = template_img * (1-mask_template) + pert * mask_template
+            pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
+            pert_search = search_img * (1-mask_search) + pert_warped * mask_search
+
+            pert_data = (pert_template, template_bbox, pert_search, search_bbox)
+            pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
+
+            plt.figure('loss')
+            plt.imshow(pscore.detach().reshape(5,25,25).cpu().numpy().sum(axis=0))
+            plt.pause(0.01)
+
+            loss = -self.loss(pscore, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            pert.data = (pert.data).clamp(0, 255)
 
         fig, axes = plt.subplots(2,2, num='attack')
-        
         ax = axes[0,0]
         ax.set_title('before')
         search_cropped =  kornia.tensor_to_image(self.model.search_cropped.byte())
         ax.imshow(search_cropped)
-        x, y, w, h = bbox
+        x, y, w, h = bbox[0]
         rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
         ax.add_patch(rect)
 
         ax = axes[0,1]
         ax.imshow(pscore.detach().reshape(5,25,25).cpu().numpy().sum(axis=0))
-        
         plt.show()
 
     def get_label(self, track_bbox, thr_iou=0.2, need_iou=False):
+        '''Input track_bbox: np.array of size (B, 4)
+           Return np.array type '''
 
         anchors = self.model.anchor.all_anchors[1].reshape(4, -1).transpose(1, 0)
         anchor_num = anchors.shape[0]
-        clss = np.zeros((anchor_num,), dtype=np.int64)
-        delta = np.zeros((4, anchor_num), dtype=np.float32)
+      
+        cls_list, delta_list = list(), list()
+        for i in range(track_bbox.shape[0]):
+            tx, ty, tw, th = track_bbox[i]
+            tcx, tcy = tx+tw/2, ty+th/2
+            cx, cy, w, h = anchors[:,0]+127, anchors[:,1]+127, anchors[:,2], anchors[:,3] 
 
-        tx, ty, tw, th = track_bbox
-        tcx, tcy = tx+tw/2, ty+th/2
-        cx, cy, w, h = anchors[:,0]+127, anchors[:,1]+127, anchors[:,2], anchors[:,3] 
+            clss = np.zeros((anchor_num,), dtype=np.int64)
+            delta = np.zeros((4, anchor_num), dtype=np.float32)
 
-        # delta
-        delta[0] = (tcx - cx) / w
-        delta[1] = (tcy - cy) / h
-        delta[2] = np.log(tw / w)
-        delta[3] = np.log(th / h)
+            # delta
+            delta[0] = (tcx - cx) / w
+            delta[1] = (tcy - cy) / h
+            delta[2] = np.log(tw / w)
+            delta[3] = np.log(th / h)
 
-        # IoU
-        overlap = IoU(center2corner(np.array((cx,cy,w,h))), center2corner(np.array((tcx,tcy,tw,th))))
-        pos = np.where(overlap > thr_iou)
-        clss[pos] = 1
+            # IoU
+            overlap = IoU(center2corner(np.array((cx,cy,w,h))), center2corner(np.array((tcx,tcy,tw,th))))
+            pos = np.where(overlap > thr_iou)
+            clss[pos] = 1
 
-        # show       
-        fig = plt.figure('Label')
-        ax = fig.add_subplot(121)
-        plt.imshow(np.sum(overlap.reshape(5,25,25), axis=0))
+            cls_list.append(clss)
+            delta_list.append(delta)
 
-        ax = fig.add_subplot(122)
-        ax.imshow(kornia.tensor_to_image(self.model.search_cropped.byte()))
-        rect = patches.Rectangle((tx, ty), tw, th, linewidth=2, edgecolor='r', facecolor='none')
-        ax.add_patch(rect)
-        for i in range(anchors.shape[0]):
-            cx, cy, w, h = anchors[i,0], anchors[i,1], anchors[i,2], anchors[i,3]
-            bb_center = patches.Circle((cx+127, cy+127), color='b', radius=0.5)
-            ax.add_patch(bb_center)
-        for i in range(anchors.shape[0]):
-            if clss[i]==1:
-                cx, cy, w, h = anchors[i,0], anchors[i,1], anchors[i,2], anchors[i,3]
-                bb_center = patches.Circle((cx+127, cy+127), color='r', radius=0.5)
-                ax.add_patch(bb_center)
-        plt.pause(0.01)
+        # fig = plt.figure('Label')
+        # for i in range(track_bbox.shape[0]):
+        #     ax = fig.add_subplot(1, track_bbox.shape[0], i+1)
+        #     tx, ty, tw, th = track_bbox[i]
+
+        #     ax.imshow(kornia.tensor_to_image(self.model.search_cropped[i].byte()))
+        #     rect = patches.Rectangle((tx, ty), tw, th, linewidth=2, edgecolor='r', facecolor='none')
+        #     ax.add_patch(rect)
+        #     for i in range(anchors.shape[0]):
+        #         cx, cy, w, h = anchors[i,0], anchors[i,1], anchors[i,2], anchors[i,3]
+        #         bb_center = patches.Circle((cx+127, cy+127), color='b', radius=0.2)
+        #         ax.add_patch(bb_center)
+        #     for i in range(anchors.shape[0]):
+        #         if clss[i]==1:
+        #             cx, cy, w, h = anchors[i,0], anchors[i,1], anchors[i,2], anchors[i,3]
+        #             bb_center = patches.Circle((cx+127, cy+127), color='r', radius=0.2)
+        #             ax.add_patch(bb_center)
+        # plt.show()
+
+        return np.array(cls_list), np.array(delta_list)
 
         if not need_iou:
             return clss, delta
         else:
             return clss, delta, overlap
 
-        
-def bbox2center_sz(bbox):
-    x, y, w, h = bbox
-    pos = np.array([x + w / 2, y + h / 2])
-    sz = np.array([w, h])
-    return pos, sz
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt

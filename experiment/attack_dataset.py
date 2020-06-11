@@ -31,11 +31,13 @@ class AttackDataset(Dataset):
 
     def __getitem__(self, idx):
         template_idx = 0
+        step = 1
+        print(self.img_names[idx*step+1])
         
         template_img = np.transpose(cv2.imread(self.img_names[template_idx]), (2, 0, 1)).astype(np.float32)
-        search_img = np.transpose(cv2.imread(self.img_names[idx+1]), (2, 0, 1)).astype(np.float32)
+        search_img = np.transpose(cv2.imread(self.img_names[idx*step+1]), (2, 0, 1)).astype(np.float32)
         template_bbox = np.array(self.bbox[template_idx])
-        search_bbox = np.array(self.bbox[idx])
+        search_bbox = np.array(self.bbox[idx*step])
        
         return template_img, template_bbox, search_img, search_bbox
 
@@ -43,7 +45,7 @@ if __name__ =='__main__':
     import kornia
 
     dataset = AttackDataset()
-    dataloader = DataLoader(dataset, batch_size=20)
+    dataloader = DataLoader(dataset, batch_size=2)
 
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("search", cv2.WND_PROP_FULLSCREEN)
@@ -62,4 +64,4 @@ if __name__ =='__main__':
             cv2.rectangle(search_img, (x, y), (x+w, y+h), (0, 0, 255), 4)
             cv2.imshow('search', search_img)
 
-            cv2.waitKey(1)
+            cv2.waitKey(0)

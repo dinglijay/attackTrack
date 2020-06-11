@@ -11,7 +11,7 @@ from utils.config_helper import load_config
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
-from tracker import Tracker, tracker_init, tracker_track, bbox2center_sz
+from tracker import Tracker, bbox2center_sz
 from attack_dataset import AttackDataset
 
 

@@ -26,41 +26,64 @@ def get_circle_mask(shape=(127,127), loc=(64,64), diameter=12, sharpness=40):
 
 def get_bbox_mask(shape=(127,127), bbox=(50,50,20,20), mode='numpy'):
     """Return a rectangle mask of a given shape"""
-    
-    x,y,w,h = bbox
-    assert (x+w)<shape[1] and (y+h)<shape[0]
+    if type(bbox) == torch.Tensor:
+        bbox = bbox.cpu()
+    bbox = np.array(bbox).reshape(-1,4)
+    masks = list()
+    for i in range(bbox.shape[0]):
+        x,y,w,h = bbox[i]
+        assert (x+w)<shape[1] and (y+h)<shape[0]
+        mask = np.zeros(shape)
+        mask[y:y+h, x:x+w] = 1
+        mask = np.expand_dims(mask, axis=2)
+        masks.append(np.broadcast_to(mask, (shape[0],shape[1],3)).astype(np.float32))
 
-    mask = np.zeros(shape)
-    mask[y:y+h, x:x+w] = 1
-    mask = np.expand_dims(mask, axis=2)
-    mask = np.broadcast_to(mask, (shape[0],shape[1],3)).astype(np.float32)
+    return np.array(masks) if mode=='numpy' else torch.tensor(masks).permute(0,3,1,2)
 
-    return mask if mode=='numpy' else torch.Tensor(mask).permute(2,0,1).unsqueeze(0)
 
 def scale_bbox(bbox, scale_wh):
+    # todo: unify operation on tensor and int list
 
-    x, y, w, h = bbox
-    c_x = x + w/2
-    c_y = y + h/2
+    if type(bbox) == np.ndarray or type(bbox) == torch.Tensor:
+        c_x = bbox[:, 0] + bbox[:, 2]/2
+        c_y = bbox[:, 1] + bbox[:, 3]/2
+        scale_w, scale_h = scale_wh
+        bbox[:, 2] = bbox[:, 2] * scale_w
+        bbox[:, 3] = bbox[:, 3] * scale_h
+        bbox[:, 0] = c_x - bbox[:, 2]/2
+        bbox[:, 1] = c_x - bbox[:, 3]/2
+        return bbox
+    else:
+        x, y, w, h = bbox
+        c_x = x + w/2
+        c_y = y + h/2
 
-    scale_w, scale_h = scale_wh
-    w *= scale_w
-    h *= scale_h
-    x = c_x - w/2
-    y = c_y - h/2
-
-    return tuple(map(int, (x, y, w, h)))
+        scale_w, scale_h = scale_wh
+        w *= scale_w
+        h *= scale_h
+        x = c_x - w/2
+        y = c_y - h/2
+        return tuple(map(int, (x, y, w, h)))
 
 def warp(im_tensor, bbox_src, bbox_dest):
-    x, y, w, h = bbox_src
-    points_src = torch.FloatTensor([[[x, y], [x+w, y], [x, y+h], [x+w, y+h],]])
-    x, y, w, h = bbox_dest
-    points_dst = torch.FloatTensor([[[x, y], [x+w, y], [x, y+h], [x+w, y+h],]])
 
-    M = kornia.get_perspective_transform(points_src, points_dst).to(im_tensor.device)
-    size = im_tensor.squeeze().shape[1:]
+    if type(bbox_src) == torch.Tensor:
+        bbox_src = bbox_src.cpu()
+        bbox_dest = bbox_dest.cpu()
+    bbox_src = np.array(bbox_src).reshape(-1,4)
+    bbox_dest = np.array(bbox_dest).reshape(-1,4)
+    
+    masks = list()
+    for i in range(bbox_src.shape[0]):
+        x, y, w, h = bbox_src[i]
+        points_src = torch.FloatTensor([[[x, y], [x+w, y], [x, y+h], [x+w, y+h],]])
+        x, y, w, h = bbox_dest[i]
+        points_dst = torch.FloatTensor([[[x, y], [x+w, y], [x, y+h], [x+w, y+h],]])
 
-    return kornia.warp_perspective(im_tensor, M, size)
+        M = kornia.get_perspective_transform(points_src, points_dst).to(im_tensor.device)
+        size = im_tensor.shape[2:]
+        masks.append(kornia.warp_perspective(im_tensor[i].unsqueeze(0), M, im_tensor[i].shape[1:]))
+    return torch.cat(masks)
 
 
 if __name__ == '__main__':
@@ -72,11 +95,11 @@ if __name__ == '__main__':
     
     bbox = (100,100,200,100)
     mask = get_bbox_mask(shape=(500,500), bbox=bbox)
-    img = img*mask
+    img = img*mask.squeeze()
 
-    mask_warped = warp(kornia.image_to_tensor(img).unsqueeze(0), bbox, scale_bbox(bbox, 0.5, 0.5))
+    mask_warped = warp(kornia.image_to_tensor(img).unsqueeze(0), bbox, scale_bbox(bbox, (0.5, 0.5)))
     cv2.imshow('mask_img', img/255.0)
-    cv2.imshow('scaled', get_bbox_mask(shape=(500,500), bbox=scale_bbox(bbox, 0.5, 0.5)))
+    cv2.imshow('scaled', get_bbox_mask(shape=(500,500), bbox=scale_bbox(bbox,(0.5, 0.5))).squeeze())
     cv2.imshow('mask_warped', kornia.tensor_to_image(mask_warped.byte()) )
     cv2.waitKey(0)
 

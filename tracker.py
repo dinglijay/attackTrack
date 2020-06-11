@@ -23,22 +23,22 @@ class SubWindow(torch.nn.Module):
     def __init__(self):
         super(SubWindow, self).__init__()
         
-    def forward(self, im, pos, size_wh, out_size=127):
+    def forward(self, im_, pos_, size_wh_, out_size=127):
 
-        if len(im.shape) == 3:
-            im.unsqueeze_(dim=0)
-            pos.unsqueeze_(dim=0)
-            size_wh.unsqueeze_(dim=0)
+        if len(im_.shape) == 3:
+            im_.unsqueeze_(dim=0)
+            pos_.unsqueeze_(dim=0)
+            size_wh_.unsqueeze_(dim=0)
 
-        B, C, H, W = im.shape
-        ims = im.split(1) 
-        poss = pos.split(1)
-        size_whs = size_wh.split(1)
+        B, C, H, W = im_.shape
+        ims = im_.split(1) 
+        poss = pos_.split(1)
+        size_whs = size_wh_.split(1)
         out_size = (out_size, out_size)
 
         out_ims = []
         for im, pos, sz in zip(ims, poss, size_whs):
-            avg = im.mean()
+            avg = im.mean().detach()
 
             c = (sz + 1) / 2
             context_xmin = torch.round(pos[0,0] - c)
@@ -221,9 +221,9 @@ def tracker_track(state, im, model, device='cpu', debug=False):
     s_x = np.sqrt(wc_x * hc_x)
     scale_x = p.exemplar_size / s_x
 
-    pscore, delta, pscore_size = model.track(kornia.image_to_tensor(im).to(device).float(),
-                                                torch.from_numpy(target_pos).to(device),
-                                                torch.from_numpy(target_sz).to(device))
+    pscore, delta, pscore_size = model.track(kornia.image_to_tensor(im).unsqueeze(dim=0).to(device).float(),
+                                             torch.from_numpy(target_pos).unsqueeze(dim=0).to(device),
+                                             torch.from_numpy(target_sz).unsqueeze(dim=0).to(device))
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
 
