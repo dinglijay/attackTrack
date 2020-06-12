@@ -88,111 +88,6 @@ class PatchTrainer(object):
                 res_y = int(res_cy - res_h / 2)
                 res_bbox.append(((res_x, res_y, res_w, res_h)))
             return pscore, delta, pscore_size, np.array(res_bbox)
-                        
-    def loss(self, pscore, labels):
-
-        clss_label, deltas_label = labels
-
-        clss_label = torch.from_numpy(clss_label).to(self.device)
-        # deltas_label = torch.tensor(deltas_label, device=self.device)
-
-        clss_pred = torch.log(torch.stack([pscore, 1-pscore], dim=2))
-        loss_clss = F.nll_loss(clss_pred.reshape(-1, 2), clss_label.reshape(-1))
-
-        print('Loss -> loss_clss: {:.2f}'.format(loss_clss.cpu().data.numpy()))
-
-        # pred_pos = torch.index_select(clss_pred, 0, pos)
-        # pred_neg = torch.index_select(clss_pred, 0, neg)
-        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
-
-        return loss_clss
-
-        ######################################
-        b, a2, h, w = pscore.shape
-        assert b==1
-        pscore = pscore.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
-        # clss_pred = F.softmax(pscore, dim=4).view(-1,2)[...,1]
-        clss_pred = F.log_softmax(pscore, dim=4).view(-1,2)
-        loss_clss = F.nll_loss(clss_pred, clss_label)
-        
-        pred_pos = torch.index_select(clss_pred, 0, pos)
-        pred_neg = torch.index_select(clss_pred, 0, neg)
-        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
-
-        ######################################   
-        deltas_pred = delta.view(4,-1)
-        diff = (deltas_pred - deltas_label).abs().sum(dim=0)
-        loss_delta = torch.index_select(diff, 0, pos).mean()
-
-        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.2f}'\
-                .format(torch.max(pred_pos).cpu().data.numpy(),\
-                        torch.max(pred_neg).cpu().data.numpy(),\
-                        loss_clss.cpu().data.numpy(),\
-                        loss_delta.cpu().data.numpy()))
-        return loss_clss + loss_delta
-    
-    def attack(self):
-        device = self.device
-
-        # Setup attacker cfg
-        num_iters = 100
-        adam_lr = 300
-        mu, sigma = 127, 5
-        label_thr_iou = 0.01
-        pert_sz_ratio = (0.6, 0.3)
-
-        # Load data
-        dataloader = DataLoader(self.dataset, batch_size=1)
-        data = next(iter(dataloader))
-        
-        # Move tensor to device
-        template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
-
-        # Tracking and Label
-        pscore, delta, pscore_size, bbox = self.get_tracking_result(*data, out_layer='bbox')
-        labels = self.get_label(bbox, thr_iou=label_thr_iou, need_iou=True)
-
-        # Generate masks
-        im_shape = template_img.shape[2:]
-        bbox_pert_temp = scale_bbox(template_bbox, pert_sz_ratio)
-        bbox_pert_xcrop = scale_bbox(search_bbox, pert_sz_ratio)
-        mask_template = get_bbox_mask(shape=im_shape, bbox=bbox_pert_temp, mode='tensor').to(device)
-        mask_search = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
-        
-        # Iteratively opti pert
-        pert = (mu + sigma * torch.randn_like(mask_template)).clamp(0,255)
-        pert = pert.clone().detach().requires_grad_(True)
-        optimizer = torch.optim.Adam([pert], lr=adam_lr)
-        for i in range(num_iters):
-            pert_template = template_img * (1-mask_template) + pert * mask_template
-            pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
-            pert_search = search_img * (1-mask_search) + pert_warped * mask_search
-
-            pert_data = (pert_template, template_bbox, pert_search, search_bbox)
-            pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
-
-            plt.figure('loss')
-            plt.imshow(pscore.detach().reshape(5,25,25).cpu().numpy().sum(axis=0))
-            plt.pause(0.01)
-
-            loss = -self.loss(pscore, labels)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            pert.data = (pert.data).clamp(0, 255)
-
-        fig, axes = plt.subplots(2,2, num='attack')
-        ax = axes[0,0]
-        ax.set_title('before')
-        search_cropped =  kornia.tensor_to_image(self.model.search_cropped.byte())
-        ax.imshow(search_cropped)
-        x, y, w, h = bbox[0]
-        rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-        ax.add_patch(rect)
-
-        ax = axes[0,1]
-        ax.imshow(pscore.detach().reshape(5,25,25).cpu().numpy().sum(axis=0))
-        plt.show()
 
     def get_label(self, track_bbox, thr_iou=0.2, need_iou=False):
         '''Input track_bbox: np.array of size (B, 4)
@@ -201,7 +96,7 @@ class PatchTrainer(object):
         anchors = self.model.anchor.all_anchors[1].reshape(4, -1).transpose(1, 0)
         anchor_num = anchors.shape[0]
       
-        cls_list, delta_list = list(), list()
+        cls_list, delta_list, iou_list = list(), list(), list()
         for i in range(track_bbox.shape[0]):
             tx, ty, tw, th = track_bbox[i]
             tcx, tcy = tx+tw/2, ty+th/2
@@ -223,6 +118,7 @@ class PatchTrainer(object):
 
             cls_list.append(clss)
             delta_list.append(delta)
+            iou_list.append(overlap)
 
         # fig = plt.figure('Label')
         # for i in range(track_bbox.shape[0]):
@@ -243,13 +139,105 @@ class PatchTrainer(object):
         #             ax.add_patch(bb_center)
         # plt.show()
 
-        return np.array(cls_list), np.array(delta_list)
+        return np.array(cls_list), np.array(delta_list), np.array(iou_list)
 
         if not need_iou:
             return clss, delta
         else:
             return clss, delta, overlap
 
+    def loss(self, pscore, delta, labels):
+
+        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
+
+        idx_neg = (ious_label>0.4) & (ious_label<=0.6)
+        idx_pos = (ious_label>0.6)
+        loss_clss = (torch.max(pscore*idx_pos, dim=1)[0] - torch.max(pscore*idx_neg, dim=1)[0]).mean()
+
+        target = np.array([-127, -127, 0, 0])
+        idx = (ious_label>0.6)
+        diff = delta.permute(0,2,1) - torch.from_numpy(target).to(self.device)
+        diff = diff.sum(dim=2)*idx
+        loss_delta = diff.sum() / idx.sum()
+
+        print('Loss -> loss_clss: {:.5f}, loss_delta: {:.5f}'.format(
+              loss_clss.cpu().data.numpy(),
+              loss_delta.cpu().data.numpy() ))
+
+        # return loss_delta
+        # return loss_clss
+        return loss_clss + 0.01*loss_delta
+    
+    def attack(self):
+        device = self.device
+
+        # Setup attacker cfg
+        num_iters = 1000
+        adam_lr = 10
+        mu, sigma = 127, 5
+        label_thr_iou = 0.4
+        pert_sz_ratio = (0.6, 0.3)
+
+        # Load data
+        dataloader = DataLoader(self.dataset, batch_size=5)
+        data = next(iter(dataloader))
+        
+        # Move tensor to device
+        template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
+
+        # Tracking and Label
+        pscore, delta, pscore_size, bbox = self.get_tracking_result(*data, out_layer='bbox')
+        labels = self.get_label(bbox, thr_iou=label_thr_iou, need_iou=True)
+
+        # Generate masks
+        im_shape = template_img.shape[2:]
+        bbox_pert_temp = scale_bbox(template_bbox, pert_sz_ratio)
+
+        bbox_pert_xcrop = scale_bbox(search_bbox, pert_sz_ratio)
+        mask_template = get_bbox_mask(shape=im_shape, bbox=bbox_pert_temp, mode='tensor').to(device)
+        mask_search = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
+
+        # Iteratively opti pert
+        pert = (mu + sigma * torch.randn(template_img.shape[-3:])).clamp(0,255)
+        pert = pert.clone().detach().to(self.device).requires_grad_(True)
+        optimizer = torch.optim.Adam([pert], lr=adam_lr)
+        for i in range(num_iters):
+            pert_template = template_img * (1-mask_template) + mask_template * pert
+            pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
+            pert_search = search_img * (1-mask_search) + pert_warped * mask_search
+
+            pert_data = (pert_template, template_bbox, pert_search, search_bbox)
+            pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
+
+            if i%10==0:
+                plt.figure('loss')
+                plt.imshow(pscore.detach().reshape(-1, 5, 25, 25).mean(dim=1).reshape(-1, 25).cpu().numpy())
+                plt.pause(0.01)
+
+                plt.figure('pert')
+                plt.imshow(kornia.tensor_to_image(pert.byte()))
+                plt.pause(0.01)
+
+                # fig, ax = plt.subplots(1,1,num='attacking')
+                # # ax[0].set_title('pert_template')
+                # # ax[0].imshow(kornia.tensor_to_image(pert_template.byte()))
+                # # ax[1].set_title('pert_search')
+                # # ax[1].imshow(kornia.tensor_to_image(pert_search.byte()))
+                # ax.set_title('result')
+                # ax.imshow(kornia.tensor_to_image(self.model.search_cropped.byte()))
+                # x, y, w, h = bbox.squeeze()
+                # rect = patches.Rectangle((x, y), w, h, linewidth=2, edgecolor='r', facecolor='none')
+                # ax.add_patch(rect)
+                # plt.pause(0.01)
+
+            loss = self.loss(pscore, delta, labels)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            pert.data = (pert.data).clamp(0, 255)
+
+    def show_attack_pscore(self):
+        pass
 
 if __name__ == '__main__':
     from matplotlib import pyplot as plt

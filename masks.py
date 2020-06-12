@@ -45,13 +45,14 @@ def scale_bbox(bbox, scale_wh):
     # todo: unify operation on tensor and int list
 
     if type(bbox) == np.ndarray or type(bbox) == torch.Tensor:
+        bbox = bbox.clone().detach()
         c_x = bbox[:, 0] + bbox[:, 2]/2
         c_y = bbox[:, 1] + bbox[:, 3]/2
         scale_w, scale_h = scale_wh
         bbox[:, 2] = bbox[:, 2] * scale_w
         bbox[:, 3] = bbox[:, 3] * scale_h
         bbox[:, 0] = c_x - bbox[:, 2]/2
-        bbox[:, 1] = c_x - bbox[:, 3]/2
+        bbox[:, 1] = c_y - bbox[:, 3]/2
         return bbox
     else:
         x, y, w, h = bbox
@@ -65,7 +66,12 @@ def scale_bbox(bbox, scale_wh):
         y = c_y - h/2
         return tuple(map(int, (x, y, w, h)))
 
-def warp(im_tensor, bbox_src, bbox_dest):
+def warp(pert_tensor, bbox_src, bbox_dest):
+    '''
+    Input: pert_tensor : Tensor (3, W, H)
+           bbox_src and bbox_dest: (B, 4)
+    Output: Tensor (B, 3, W, H)
+    '''
 
     if type(bbox_src) == torch.Tensor:
         bbox_src = bbox_src.cpu()
@@ -80,9 +86,9 @@ def warp(im_tensor, bbox_src, bbox_dest):
         x, y, w, h = bbox_dest[i]
         points_dst = torch.FloatTensor([[[x, y], [x+w, y], [x, y+h], [x+w, y+h],]])
 
-        M = kornia.get_perspective_transform(points_src, points_dst).to(im_tensor.device)
-        size = im_tensor.shape[2:]
-        masks.append(kornia.warp_perspective(im_tensor[i].unsqueeze(0), M, im_tensor[i].shape[1:]))
+        M = kornia.get_perspective_transform(points_src, points_dst).to(pert_tensor.device)
+        size = pert_tensor.shape[-2:]
+        masks.append(kornia.warp_perspective(pert_tensor.unsqueeze(0), M, size))
     return torch.cat(masks)
 
 
@@ -97,7 +103,7 @@ if __name__ == '__main__':
     mask = get_bbox_mask(shape=(500,500), bbox=bbox)
     img = img*mask.squeeze()
 
-    mask_warped = warp(kornia.image_to_tensor(img).unsqueeze(0), bbox, scale_bbox(bbox, (0.5, 0.5)))
+    mask_warped = warp(kornia.image_to_tensor(img), bbox, scale_bbox(bbox, (0.5, 0.5)))
     cv2.imshow('mask_img', img/255.0)
     cv2.imshow('scaled', get_bbox_mask(shape=(500,500), bbox=scale_bbox(bbox,(0.5, 0.5))).squeeze())
     cv2.imshow('mask_warped', kornia.tensor_to_image(mask_warped.byte()) )
