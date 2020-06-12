@@ -147,7 +147,6 @@ class PatchTrainer(object):
             return clss, delta, overlap
 
     def loss(self, pscore, delta, labels):
-
         clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
 
         idx_neg = (ious_label>0.4) & (ious_label<=0.6)
@@ -164,8 +163,6 @@ class PatchTrainer(object):
               loss_clss.cpu().data.numpy(),
               loss_delta.cpu().data.numpy() ))
 
-        # return loss_delta
-        # return loss_clss
         return loss_clss + 0.01*loss_delta
     
     def attack(self):
@@ -192,7 +189,6 @@ class PatchTrainer(object):
         # Generate masks
         im_shape = template_img.shape[2:]
         bbox_pert_temp = scale_bbox(template_bbox, pert_sz_ratio)
-
         bbox_pert_xcrop = scale_bbox(search_bbox, pert_sz_ratio)
         mask_template = get_bbox_mask(shape=im_shape, bbox=bbox_pert_temp, mode='tensor').to(device)
         mask_search = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
