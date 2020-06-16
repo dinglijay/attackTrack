@@ -8,7 +8,7 @@ import numpy as np
 
 class AttackDataset(Dataset):
 
-    def __init__(self, root_dir='data/Human1', transform=None):
+    def __init__(self, root_dir='data/Human1', step=10, transform=None):
         self.root_dir = root_dir
         self.img_names = sorted(glob.glob(join(root_dir, 'imgs', '*.jp*')))
 
@@ -25,26 +25,27 @@ class AttackDataset(Dataset):
         assert len(self.bbox) == len(self.img_names) == self.rets.shape[0] ==self.corners.shape[0]
 
         self.transform = transform
+        self.step = step
 
     def __len__(self):
-        return len(self.img_names)-1
+        return len(self.img_names) - self.step 
 
     def __getitem__(self, idx):
         template_idx = 0
-        step = 1
-        print(self.img_names[idx*step+1])
+        search_idx = idx + self.step
+        print(self.img_names[template_idx], self.img_names[search_idx])
         
         template_img = np.transpose(cv2.imread(self.img_names[template_idx]), (2, 0, 1)).astype(np.float32)
-        search_img = np.transpose(cv2.imread(self.img_names[idx*step+1]), (2, 0, 1)).astype(np.float32)
+        search_img = np.transpose(cv2.imread(self.img_names[search_idx]), (2, 0, 1)).astype(np.float32)
         template_bbox = np.array(self.bbox[template_idx])
-        search_bbox = np.array(self.bbox[idx*step])
+        search_bbox = np.array(self.bbox[search_idx])
        
         return template_img, template_bbox, search_img, search_bbox
 
 if __name__ =='__main__':
     import kornia
 
-    dataset = AttackDataset()
+    dataset = AttackDataset(step=50)
     dataloader = DataLoader(dataset, batch_size=2)
 
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
@@ -55,13 +56,13 @@ if __name__ =='__main__':
         for template_img, template_bbox, search_img, search_bbox in zip(*data):
             x, y, w, h = template_bbox.squeeze()
             template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
-            cv2.rectangle(template_img, (x, y), (x+w, y+h), (0, 255, 0), 4)
+            cv2.rectangle(template_img, (x, y), (x+w, y+h), (0, 0, 255), 4)
             cv2.imshow('template', template_img)
             cv2.waitKey(1)
 
             x, y, w, h = search_bbox.squeeze()
             search_img = np.ascontiguousarray(kornia.tensor_to_image(search_img.byte()))
-            cv2.rectangle(search_img, (x, y), (x+w, y+h), (0, 0, 255), 4)
+            cv2.rectangle(search_img, (x, y), (x+w, y+h), (0, 255, 0), 4)
             cv2.imshow('search', search_img)
 
             cv2.waitKey(0)

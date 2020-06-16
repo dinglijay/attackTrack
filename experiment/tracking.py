@@ -41,7 +41,7 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
     scale_x = model.penalty.get_scale_x(size_x)
 
     assert pscore.shape[0]==1
-    list(map(lambda x: x.squeeze_().numpy(), [pos_x,size_x, template_bbox, search_bbox]))
+    tuple(map(lambda x: x.squeeze_().numpy(), [pos_x, size_x, template_bbox, search_bbox]))
     template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
     search_img = np.ascontiguousarray(kornia.tensor_to_image(search_img.byte()))
 
@@ -93,7 +93,7 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(), batch_size=150)
+    dataloader = DataLoader(AttackDataset(root_dir='data/Human2', step=1), batch_size=100)
 
     cv2.namedWindow("SiamMask", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
