@@ -14,9 +14,10 @@ from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, corner2center, center2corner
 
 from tracker import Tracker, bbox2center_sz
-from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp
+from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp, warp_patch
 from attack_dataset import AttackDataset
 
+from matplotlib import pyplot as plt
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
 parser.add_argument('--resume', default='', type=str, required=True,
@@ -118,8 +119,8 @@ class PatchTrainer(object):
 
             cls_list.append(clss)
             delta_list.append(delta)
-            iou_list.append(overlap)
-
+            iou_list.append(overlap)   
+        # 
         # fig = plt.figure('Label')
         # for i in range(track_bbox.shape[0]):
         #     ax = fig.add_subplot(1, track_bbox.shape[0], i+1)
@@ -139,105 +140,218 @@ class PatchTrainer(object):
         #             ax.add_patch(bb_center)
         # plt.show()
 
-        return np.array(cls_list), np.array(delta_list), np.array(iou_list)
-
         if not need_iou:
-            return clss, delta
+            return np.array(cls_list), np.array(delta_list)
         else:
-            return clss, delta, overlap
+            return np.array(cls_list), np.array(delta_list), np.array(iou_list)
 
     def loss(self, pscore, delta, labels):
         clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
 
-        idx_neg = (ious_label>0.4) & (ious_label<=0.6)
-        idx_pos = (ious_label>0.6)
-        loss_clss = (torch.max(pscore*idx_pos, dim=1)[0] - torch.max(pscore*idx_neg, dim=1)[0]).mean()
+        # mask_neg = (ious_label>0.4) & (ious_label<=0.6)
+        mask_neg = (ious_label<=0.6)
+        mask_pos = (ious_label>0.6)
+        loss_clss = (torch.max(pscore*mask_pos, dim=1)[0] - torch.max(pscore*mask_neg, dim=1)[0]).mean()
 
-        target = np.array([-127, -127, 0, 0])
-        idx = (ious_label>0.6)
-        diff = delta.permute(0,2,1) - torch.from_numpy(target).to(self.device)
-        diff = diff.sum(dim=2)*idx
-        loss_delta = diff.sum() / idx.sum()
+        # target = np.array([-120, -120, 2000, 2000])
+        # diff = delta.permute(0,2,1) - torch.from_numpy(target).to(self.device)
+        target = np.array([0, 0])
+        diff = delta.permute(0,2,1)[...,2:] - torch.from_numpy(target).to(self.device)
+        idx = torch.topk(pscore, k=10, dim=1)[1]
+        diff = diff.abs().mean(dim=2) # (B, 3125)
+        diffs = list()
+        for i in range(diff.shape[0]):
+            diffs.append(diff[i].take(idx[i]) )
+        loss_delta = torch.stack(diffs).mean()
+
+        print('Loss -> loss_clss[0]: {:.5f}, loss_clss[1]: {:.5f}, loss_delta: {:.5f}'.format(
+              diffs[0].detach().mean().cpu().numpy(),
+              diffs[1].detach().mean().cpu().numpy(),
+              loss_delta.detach().cpu().numpy() ))
+
+        # print('Loss -> loss_clss: {:.5f}, loss_delta: {:.5f}'.format(
+        #       loss_clss.cpu().data.numpy(),
+        #       loss_delta.cpu().data.numpy() ))
+
+        return 0.1*loss_delta
+        return loss_clss
+        # return loss_clss + 0.01*loss_delta
+
+    def loss_clss(self, pscore, delta, labels):
+        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
+
+        # mask_neg = (ious_label>0.4) & (ious_label<=0.6)
+        mask_neg = (ious_label<=0.6)
+        mask_pos = (ious_label>0.6)
+        loss_clss = (torch.max(pscore*mask_pos, dim=1)[0] - torch.max(pscore*mask_neg, dim=1)[0]).mean()
+
+        target = np.array([0, 0])
+        diff = delta.permute(0,2,1)[...,2:] - torch.from_numpy(target).to(self.device)
+        idx = torch.topk(pscore, k=100, dim=1)[1]
+        diff = diff.abs().mean(dim=2) # (B, 3125)
+        diffs = list()
+        for i in range(diff.shape[0]):
+            diffs.append(diff[i].take(idx[i]) )
+        loss_delta = torch.stack(diffs).mean()
 
         print('Loss -> loss_clss: {:.5f}, loss_delta: {:.5f}'.format(
               loss_clss.cpu().data.numpy(),
               loss_delta.cpu().data.numpy() ))
+        return loss_clss
 
-        return loss_clss + 0.01*loss_delta
-    
+    def loss_delta(self, pscore, delta, labels):
+        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
+        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
+
+        diff = (delta - deltas_label).abs().mean(dim=1)
+        mask_pos = (ious_label > 0.3)
+        loss_delta = (diff * mask_pos).sum() / mask_pos.sum()
+        print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
+        return -loss_delta
+
+    def loss_delta2(self, pscore, delta, labels):
+        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
+        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
+
+        diff = (delta - deltas_label).abs().sum(dim=1)
+        weight = pscore.detach().view(diff.shape)
+        loss_delta = (diff * weight).mean()
+
+        print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
+        return -loss_delta
+
+    def loss_delta3(self, pscore, delta, labels):
+        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
+        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
+        pos = clss_label.eq(1).nonzero()
+
+        diff = (delta - deltas_label).abs().sum(dim=1)
+        loss_delta = torch.index_select(diff, 0, pos).mean()
+        print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
+        return -loss_delta
+
     def attack(self):
         device = self.device
 
         # Setup attacker cfg
         num_iters = 1000
-        adam_lr = 10
+        adam_lr = 1
         mu, sigma = 127, 5
-        label_thr_iou = 0.4
+        patch_sz = (100, 70)
+        label_thr_iou = 0.01
         pert_sz_ratio = (0.6, 0.3)
+        BATCHSIZE = 1
 
         # Load data
-        dataloader = DataLoader(self.dataset, batch_size=5)
+        dataloader = DataLoader(self.dataset, batch_size=BATCHSIZE)
         data = next(iter(dataloader))
         
         # Move tensor to device
         template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
         # Tracking and Label
-        pscore, delta, pscore_size, bbox = self.get_tracking_result(*data, out_layer='bbox')
-        labels = self.get_label(bbox, thr_iou=label_thr_iou, need_iou=True)
-
+        data_track = (template_img, template_bbox, search_img, template_bbox)
+        pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
+        
+        # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
+        labels = self.get_label(bbox_src, thr_iou=label_thr_iou, need_iou=True)
+        self.bbox_src = bbox_src
+ 
         # Generate masks
         im_shape = template_img.shape[2:]
-        bbox_pert_temp = scale_bbox(template_bbox, pert_sz_ratio)
-        bbox_pert_xcrop = scale_bbox(search_bbox, pert_sz_ratio)
-        mask_template = get_bbox_mask(shape=im_shape, bbox=bbox_pert_temp, mode='tensor').to(device)
-        mask_search = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
+        patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
+        patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
+        mask_template = get_bbox_mask(shape=im_shape, bbox=patch_pos_temp, mode='tensor').to(device)
+        mask_search = get_bbox_mask(shape=im_shape, bbox=patch_pos_search, mode='tensor').to(device)
 
         # Iteratively opti pert
-        pert = (mu + sigma * torch.randn(template_img.shape[-3:])).clamp(0,255)
-        pert = pert.clone().detach().to(self.device).requires_grad_(True)
-        optimizer = torch.optim.Adam([pert], lr=adam_lr)
+        # patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0,255)
+        patch = cv2.resize(cv2.imread('data/patchnew0.jpg'), (patch_sz[1], patch_sz[0])) # W, H
+        patch = kornia.image_to_tensor(patch).to(torch.float)
+        patch = patch.clone().detach().to(self.device).requires_grad_(True) # (3, H, W)
+        optimizer = torch.optim.Adam([patch], lr=adam_lr)
         for i in range(num_iters):
-            pert_template = template_img * (1-mask_template) + mask_template * pert
-            pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
-            pert_search = search_img * (1-mask_search) + pert_warped * mask_search
+            patch_warped_template = warp_patch(patch, template_img, patch_pos_temp)
+            patch_warped_search = warp_patch(patch, search_img, patch_pos_search)
+            patch_template = torch.where(mask_template==1, patch_warped_template, template_img)
+            patch_search = torch.where(mask_search==1, patch_warped_search, search_img)
 
-            pert_data = (pert_template, template_bbox, pert_search, search_bbox)
+            pert_data = (patch_template, template_bbox, patch_search, template_bbox)
             pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
-
-            if i%10==0:
-                plt.figure('loss')
-                plt.imshow(pscore.detach().reshape(-1, 5, 25, 25).mean(dim=1).reshape(-1, 25).cpu().numpy())
-                plt.pause(0.01)
-
-                plt.figure('pert')
-                plt.imshow(kornia.tensor_to_image(pert.byte()))
-                plt.pause(0.01)
-
-                # fig, ax = plt.subplots(1,1,num='attacking')
-                # # ax[0].set_title('pert_template')
-                # # ax[0].imshow(kornia.tensor_to_image(pert_template.byte()))
-                # # ax[1].set_title('pert_search')
-                # # ax[1].imshow(kornia.tensor_to_image(pert_search.byte()))
-                # ax.set_title('result')
-                # ax.imshow(kornia.tensor_to_image(self.model.search_cropped.byte()))
-                # x, y, w, h = bbox.squeeze()
-                # rect = patches.Rectangle((x, y), w, h, linewidth=2, edgecolor='r', facecolor='none')
-                # ax.add_patch(rect)
-                # plt.pause(0.01)
-
-            loss = self.loss(pscore, delta, labels)
+    
+            if i%30==0:
+                self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
+                self.show_attack_plt(pscore, bbox, bbox_src)
+                
+            loss = self.loss_delta(pscore, delta, labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            pert.data = (pert.data).clamp(0, 255)
+            patch.data = (patch.data).clamp(0, 255)
+            
+        return kornia.tensor_to_image(patch.detah().byte())
 
-    def show_attack_pscore(self):
-        pass
+    def show_pscore_delta(self, pscore, delta, track_bbox, fig_num='pscore_delta'):
+        if torch.is_tensor(delta):
+            delta = delta.detach().cpu().numpy()
+        if not len(delta.shape) == 3:
+            delta = delta.reshape((-1, 4, 3125))
+        anchor = self.model.all_anchors.detach().cpu().numpy()
+        cx = delta[:, 0, :] * anchor[:, 2] + anchor[:, 0]
+        cy = delta[:, 1, :] * anchor[:, 3] + anchor[:, 1]
+        w = np.exp(delta[:, 2, :]) * anchor[:, 2]
+        h = np.exp(delta[:, 3, :]) * anchor[:, 3]
+
+        iou_list = list()
+        for i in range(track_bbox.shape[0]):
+            tx, ty, tw, th = track_bbox[i]
+            tcx, tcy = tx+tw/2, ty+th/2
+            overlap = IoU(center2corner(np.array((cx[i]+127,cy[i]+127,w[i],h[i]))), center2corner(np.array((tcx,tcy,tw,th))))
+            iou_list.append(overlap)
+        ious = np.array(iou_list) # (B, 3125)
+        ious_img = ious.mean(axis=0).reshape(-1, 25)# (B*5, 3125)
+
+        fig, axes = plt.subplots(1,2,num=fig_num)
+        ax = axes[0]
+        ax.set_title('pscore')
+        ax.imshow(pscore.detach().reshape(-1, 3125).mean(dim=0).reshape(-1, 25).cpu().numpy(),
+                vmin=0, vmax=1)
+        ax = axes[1]
+        ax.set_title('delta')
+        ax.imshow(ious_img, vmin=0, vmax=1)
+        plt.pause(0.001)
+
+        return ious, ious_img
+
+    def show_attack_plt(self, pscore, bbox, bbox_src):
+        fig, axes = plt.subplots(1,2,num='attacking')
+        ax = axes[0]
+        ax.set_title('loss')
+        ax.imshow(kornia.tensor_to_image(self.model.template_cropped.byte()).reshape(-1, 127, 3))
+        ax = axes[1]
+        ax.set_title('result')
+        ax.imshow(kornia.tensor_to_image(self.model.search_cropped.byte()).reshape(-1, 255, 3))
+        for i, xywh in enumerate(bbox):
+            x, y, w, h = xywh
+            rect = patches.Rectangle((x, y+i*255), w, h, linewidth=1, edgecolor='b', facecolor='none')
+            ax.add_patch(rect)
+        for i, xywh in enumerate(bbox_src):
+            x, y, w, h = xywh
+            rect = patches.Rectangle((x, y+i*255), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax.add_patch(rect)
+        plt.pause(0.01)
+
+    def generate_patch(self, size=(300, 400)):
+        """
+        Generate a random patch as a starting point for optimization.
+        """
+        adv_patch_cpu = (mu + sigma * torch.randn(3, size[0], size[1])).clamp(0,255)
+
+        return adv_patch_cpu
 
 if __name__ == '__main__':
-    from matplotlib import pyplot as plt
     import matplotlib.patches as patches
 
     trainer = PatchTrainer(args)
-    trainer.attack()
+    patch = trainer.attack()
+    plt.savefig('patch.png')

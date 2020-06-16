@@ -58,7 +58,7 @@ class SubWindow(torch.nn.Module):
             im = torch.narrow(im, 2, context_ymin, context_ymax-context_ymin+1)
             im = torch.narrow(im, 3, context_xmin, context_xmax-context_xmin+1)
             im_sub = F.pad(im, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg) 
-            im_sub = F.interpolate(im_sub, size=out_size, mode='bilinear')
+            im_sub = F.interpolate(im_sub, size=out_size) #, mode='bilinear')
             out_ims.append(im_sub)
         
         return torch.cat(out_ims)
@@ -93,7 +93,10 @@ class PenaltyLayer(torch.nn.Module):
 
     def forward(self, score, delta, target_sz):
         B = score.shape[0]
-        delta = delta.view(B, 4, -1)
+        ''' 
+        detach delta tensor here????
+        '''
+        delta = delta.clone().detach().view(B, 4, -1)
         score = F.softmax(score.view(B, 2, -1), dim=1)[:,1]
 
         anchor = self.anchor.clone().detach().requires_grad_(False)
@@ -186,6 +189,7 @@ class Tracker(Custom):
         self.search_cropped = self.get_subwindow(search_img, target_pos, crop_sz, out_size=self.p.instance_size)
         search = self.features(self.search_cropped)
         rpn_pred_cls, rpn_pred_loc = self.rpn(self.zf, search)
+        self.rpn_pred_cls, self.rpn_pred_loc = rpn_pred_cls, rpn_pred_loc
         pscore, delta, pscore_size = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz)
         return pscore, delta, pscore_size
 
