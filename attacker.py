@@ -3,7 +3,7 @@ from utils.anchors import Anchors
 from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, corner2center, center2corner
 from models.siammask_sharp import select_cross_entropy_loss, get_cls_loss, weight_l1_loss
-from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp
+from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp, warp_patch
 import test
 
 from torch.autograd import Variable
@@ -66,16 +66,23 @@ class AttackWrapper(object):
         track_res, score_res, pscore_res = self.get_tracking_result(state['template'], self.x_crop)
         labels = self.get_label(track_res, thr_iou=label_thr_iou, need_iou=True)
 
-        pert = (mu + sigma * torch.randn_like(mask_template)).clamp(0,255)
-        pert = torch.tensor(pert, requires_grad=True)
+        im_template = im_template.unsqueeze(dim=0).to(torch.float)
+        im_xcrop = im_xcrop.unsqueeze(dim=0).to(torch.float)
+        bbox_pert_temp = torch.tensor(bbox_pert_temp).unsqueeze(dim=0).to(device)
+        bbox_pert_xcrop = torch.tensor(bbox_pert_xcrop).unsqueeze(dim=0).to(device)
+
+        pert_sz = (50, 35)
+        pert = (mu + sigma * torch.randn(3, pert_sz[0], pert_sz[1])).clamp(0,255)
+        pert = pert.clone().detach().to(device).requires_grad_(True).to(im_template.device) # (3, H, W)
         optimizer = torch.optim.Adam([pert], lr=adam_lr)
         for i in range(num_iters):
-            im_pert_template = im_template * (1-mask_template) + pert * mask_template
-            im_pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
-            im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
-
-            template = test.get_subwindow_tracking_(im_pert_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
-            x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+            patch_warped_template = warp_patch(pert, im_template, bbox_pert_temp)
+            patch_warped_search = warp_patch(pert, im_xcrop, bbox_pert_xcrop)
+            patch_template = torch.where(mask_template==1, patch_warped_template, im_template)
+            patch_search = torch.where(mask_xcrop==1, patch_warped_search, im_xcrop)
+    
+            template = test.get_subwindow_tracking_(patch_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
+            x_crop = test.get_subwindow_tracking_(patch_search, state['target_pos'], p.instance_size, round(self.s_x), 0)
            
             score, delta = self.model.track(x_crop, template)
 
