@@ -78,6 +78,15 @@ class AttackWrapper(object):
             x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
            
             score, delta = self.model.track(x_crop, template)
+
+            ###################  Show Loss and Delta Change ######################
+            score_data = F.softmax(score.view(score.shape[0], 2, -1), dim=1)[:,1]
+            delta_data = delta.view(delta.shape[0], 4, -1).data
+            res_cx, res_cy, res_w, res_h = track_res
+            track_res_data = (res_cx-res_w/2, res_cy-res_h/2, res_w, res_h)
+            self.show_pscore_delta(score_data, delta_data, track_res_data)
+            self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
+
             loss = -self.loss2(score, delta, pscore_res, labels)
             optimizer.zero_grad()
             loss.backward()
@@ -271,7 +280,7 @@ class AttackWrapper(object):
                         torch.max(pred_neg).cpu().data.numpy(),\
                         loss_clss.cpu().data.numpy(),\
                         loss_delta.cpu().data.numpy()))
-        # return loss_delta
+        return loss_delta
         return loss_clss
         return loss_clss + loss_delta
         
@@ -306,7 +315,7 @@ class AttackWrapper(object):
         ax = axes[0,0]
         ax.set_title('Result')
         res_cx, res_cy, res_w, res_h = track_res
-        ax.imshow(self.x_crop.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
+        ax.imshow(x_crop.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
         rect = patches.Rectangle((res_cx-res_w/2, res_cy-res_h/2), res_w, res_h, linewidth=1, edgecolor='r', facecolor='none')
         ax.add_patch(rect)
 
@@ -339,6 +348,40 @@ class AttackWrapper(object):
 
         plt.pause(0.01)
 
+    def show_pscore_delta(self, pscore, delta, track_bbox, fig_num='pscore_delta'):
+        if torch.is_tensor(delta):
+            delta = delta.detach().cpu().numpy()
+        if not len(delta.shape) == 3:
+            delta = delta.reshape((-1, 4, 3125))
+        if type(track_bbox) != np.array:
+            track_bbox = np.array(track_bbox).reshape(-1, 4)
+        # anchor = self.model.all_anchors.detach().cpu().numpy()
+        anchor = self.state['p'].anchor
+        cx = delta[:, 0, :] * anchor[:, 2] + anchor[:, 0]
+        cy = delta[:, 1, :] * anchor[:, 3] + anchor[:, 1]
+        w = np.exp(delta[:, 2, :]) * anchor[:, 2]
+        h = np.exp(delta[:, 3, :]) * anchor[:, 3]
+
+        iou_list = list()
+        for i in range(track_bbox.shape[0]):
+            tx, ty, tw, th = track_bbox[i]
+            tcx, tcy = tx+tw/2, ty+th/2
+            overlap = IoU(center2corner(np.array((cx[i]+127,cy[i]+127,w[i],h[i]))), center2corner(np.array((tcx,tcy,tw,th))))
+            iou_list.append(overlap)
+        ious = np.array(iou_list) # (B, 3125)
+        ious_img = ious.mean(axis=0).reshape(-1, 25)# (B*5, 3125)
+
+        fig, axes = plt.subplots(1,2,num=fig_num)
+        ax = axes[0]
+        ax.set_title('score')
+        ax.imshow(pscore.detach().reshape(-1, 3125).mean(dim=0).reshape(-1, 25).cpu().numpy(),
+                vmin=0, vmax=1)
+        ax = axes[1]
+        ax.set_title('delta')
+        ax.imshow(ious_img, vmin=0, vmax=1)
+        plt.pause(0.001)
+
+        return ious, ious_img
 
 def norms(Z):
     """Compute norms over all but the first dimension"""
