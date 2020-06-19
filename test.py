@@ -132,26 +132,26 @@ def siamese_track(state, im, mask_enable=False, refine_enable=False, device='cpu
     # extract scaled crops for search region x at previous target position
     x_crop = Variable(get_subwindow_tracking(im, target_pos, p.instance_size, round(s_x), avg_chans).unsqueeze(0))
 
-#     # Dylan --> attack on first frame
-#     state['n_frame'] += 1
-#     state['im'] = im
-#     attackerWraper = attacker.AttackWrapper(x_crop.to(device), state, scale_x, round(s_x))
-#     template, x_crop = attackerWraper.attack()
+    # Dylan --> attack on first frame
+    state['n_frame'] += 1
+    state['im'] = im
+    attackerWraper = attacker.AttackWrapper(x_crop.to(device), state, scale_x, round(s_x))
+    template, x_crop = attackerWraper.attack()
 
-#     # fig, ax = plt.subplots(1,2,num='template_pert & xcrop_pert')
-#     # ax[0].set_title('template_pert')
-#     # ax[0].imshow(template.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
-#     # ax[1].set_title('x_crop')
-#     # ax[1].imshow(x_crop.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
-#     # plt.pause(0.01)
+    # fig, ax = plt.subplots(1,2,num='template_pert & xcrop_pert')
+    # ax[0].set_title('template_pert')
+    # ax[0].imshow(template.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+    # ax[1].set_title('x_crop')
+    # ax[1].imshow(x_crop.data.squeeze().permute(1,2,0).cpu().numpy().astype(int))
+    # plt.pause(0.01)
 # # <--
     
     if mask_enable:
         score, delta, mask = net.track_mask(x_crop.to(device))
     else:
         # Dylan --> add 'template' to net.track input
-        score, delta = net.track(x_crop.to(device), state['template']) 
-        # score, delta = net.track(x_crop.to(device), template.to(device)) 
+        # score, delta = net.track(x_crop.to(device), state['template']) 
+        score, delta = net.track(x_crop.to(device), template.to(device)) 
         # <--
 
     delta = delta.permute(1, 2, 3, 0).contiguous().view(4, -1).data.cpu().numpy()

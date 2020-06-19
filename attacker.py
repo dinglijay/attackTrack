@@ -3,7 +3,7 @@ from utils.anchors import Anchors
 from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, corner2center, center2corner
 from models.siammask_sharp import select_cross_entropy_loss, get_cls_loss, weight_l1_loss
-from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp
+from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp, warp_patch
 import test
 
 from torch.autograd import Variable
@@ -42,10 +42,10 @@ class AttackWrapper(object):
         
     def gen_template(self):
         num_iters = 100
-        adam_lr = 300
+        adam_lr = 100
         mu, sigma = 127, 5
-        label_thr_iou = 0.3
-        pert_sz_ratio = (0.3, 0.3)
+        label_thr_iou = 0.2
+        pert_sz_ratio = (0.6, 0.3)
 
         # Load state
         state = self.state
@@ -66,18 +66,37 @@ class AttackWrapper(object):
         track_res, score_res, pscore_res = self.get_tracking_result(state['template'], self.x_crop)
         labels = self.get_label(track_res, thr_iou=label_thr_iou, need_iou=True)
 
-        pert = (mu + sigma * torch.randn_like(mask_template)).clamp(0,255)
-        pert = torch.tensor(pert, requires_grad=True)
+        im_template = im_template.unsqueeze(dim=0).to(torch.float)
+        im_xcrop = im_xcrop.unsqueeze(dim=0).to(torch.float)
+        bbox_pert_temp = torch.tensor(bbox_pert_temp).unsqueeze(dim=0).to(device)
+        bbox_pert_xcrop = torch.tensor(bbox_pert_xcrop).unsqueeze(dim=0).to(device)
+
+        pert_sz = (100, 75)
+        # pert = (mu + sigma * torch.randn(3, pert_sz[0], pert_sz[1])).clamp(0,255)
+        pert = cv2.resize(cv2.imread('data/patchnew0.jpg'), (pert_sz[1], pert_sz[0])) # W, H
+        pert = kornia.image_to_tensor(pert).to(torch.float)
+        pert = pert.clone().detach().to(device).requires_grad_(True).to(im_template.device) # (3, H, W)
         optimizer = torch.optim.Adam([pert], lr=adam_lr)
         for i in range(num_iters):
-            im_pert_template = im_template * (1-mask_template) + pert * mask_template
-            im_pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
-            im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
-
-            template = test.get_subwindow_tracking_(im_pert_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
-            x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+            patch_warped_template = warp_patch(pert, im_template, bbox_pert_temp)
+            patch_warped_search = warp_patch(pert, im_xcrop, bbox_pert_xcrop)
+            patch_template = torch.where(mask_template==1, patch_warped_template, im_template)
+            patch_search = torch.where(mask_xcrop==1, patch_warped_search, im_xcrop)
+    
+            template = test.get_subwindow_tracking_(patch_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
+            x_crop = test.get_subwindow_tracking_(patch_search, state['target_pos'], p.instance_size, round(self.s_x), 0)
            
             score, delta = self.model.track(x_crop, template)
+
+            ###################  Show Loss and Delta Change ######################
+            # if i%10==0:
+            #     score_data = F.softmax(score.view(score.shape[0], 2, -1), dim=1)[:,1]
+            #     delta_data = delta.view(delta.shape[0], 4, -1).data
+            #     res_cx, res_cy, res_w, res_h = track_res
+            #     track_res_data = (res_cx-res_w/2, res_cy-res_h/2, res_w, res_h)
+            #     self.show_pscore_delta(score_data, delta_data, track_res_data)
+            #     self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
+
             loss = -self.loss2(score, delta, pscore_res, labels)
             optimizer.zero_grad()
             loss.backward()
@@ -91,48 +110,55 @@ class AttackWrapper(object):
             # ax[1].imshow(kornia.tensor_to_image(x_crop.byte()))
             # plt.pause(0.01)
 
-        im_pert_template = im_template * (1-mask_template) + pert * mask_template
-        im_pert_warped = warp(pert, bbox_pert_temp, bbox_pert_xcrop)
-        im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
-
-        template = test.get_subwindow_tracking_(im_pert_template, state['pos_z'], p.exemplar_size, round(state['s_z']), 0)
-        x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
-
-        state['im_pert_template'] = im_pert_template
-        state['pert_template'] = template
+        state['pert'] = pert.detach()
+        state['pert_template'] = template.detach()
         state['pert_sz_ratio'] = pert_sz_ratio
        
         # self.show_label(labels, track_res)
-        self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
+        # self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
         plt.show()
 
         return template, x_crop
 
     def gen_xcrop(self):
-        state = self.state
+        # state = self.state
 
-        im_pert_template = state['im_pert_template']
+        # im_pert_template = state['im_pert_template']
+        # pert_sz_ratio = state['pert_sz_ratio']
+        # p = state['p']
+
+        # im_shape = state['im'].shape[0:2]
+        # bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
+        # mask_xcrop = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(state['device'])
+
+        # bbox_pert_temp = scale_bbox(state['gts'][0], pert_sz_ratio)
+        # bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
+        # im_pert_warped = warp(im_pert_template, bbox_pert_temp, bbox_pert_xcrop)
+        # im_xcrop = kornia.image_to_tensor(state['im']).to(state['device'])
+        # im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
+
+        # x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+
+
+        state = self.state
+        pert = state['pert']
         pert_sz_ratio = state['pert_sz_ratio']
         p = state['p']
+        device = state['device']
 
         im_shape = state['im'].shape[0:2]
         bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
-        mask_xcrop = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(state['device'])
+        mask_xcrop = get_bbox_mask(shape=im_shape, bbox=bbox_pert_xcrop, mode='tensor').to(device)
 
-        bbox_pert_temp = scale_bbox(state['gts'][0], pert_sz_ratio)
-        bbox_pert_xcrop = scale_bbox(state['gts'][state['n_frame']], pert_sz_ratio)
-        im_pert_warped = warp(im_pert_template, bbox_pert_temp, bbox_pert_xcrop)
-        im_xcrop = kornia.image_to_tensor(state['im']).to(state['device'])
-        im_pert_xcrop = im_xcrop * (1-mask_xcrop) + im_pert_warped * mask_xcrop
-
-        x_crop = test.get_subwindow_tracking_(im_pert_xcrop, state['target_pos'], p.instance_size, round(self.s_x), 0)
+        bbox_pert_xcrop = torch.tensor(bbox_pert_xcrop).unsqueeze(dim=0).to(device)
+        im_xcrop = kornia.image_to_tensor(state['im']).to(torch.float).unsqueeze(dim=0).to(device)
+        patch_warped_search = warp_patch(pert, im_xcrop, bbox_pert_xcrop)
+        patch_search = torch.where(mask_xcrop==1, patch_warped_search, im_xcrop)
+        x_crop = test.get_subwindow_tracking_(patch_search, state['target_pos'], p.instance_size, round(self.s_x), 0)
 
         cv2.imshow('template', kornia.tensor_to_image(state['pert_template'].byte()))
-        cv2.imshow('template1', kornia.tensor_to_image(state['template'].byte()))
         cv2.imshow('x_crop', kornia.tensor_to_image(x_crop.byte()))
-        cv2.imshow('x_crop1', kornia.tensor_to_image(self.x_crop.byte()))
         cv2.waitKey(1)
-
         
         return state['pert_template'], x_crop
 
@@ -183,8 +209,8 @@ class AttackWrapper(object):
 
         res_cx = int(pred_in_crop[0] + 127)
         res_cy = int(pred_in_crop[1] + 127)
-        res_w = int(target_sz[0] * (1 - lr) + pred_in_crop[2] * lr)
-        res_h = int(target_sz[1] * (1 - lr) + pred_in_crop[3] * lr)
+        res_w = int(target_sz_in_crop[0] * (1 - lr) + pred_in_crop[2] * lr)
+        res_h = int(target_sz_in_crop[1] * (1 - lr) + pred_in_crop[3] * lr)
 
         return (res_cx, res_cy, res_w, res_h), score, pscore
     
@@ -255,23 +281,24 @@ class AttackWrapper(object):
         score = score.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
         # clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
         clss_pred = F.log_softmax(score, dim=4).view(-1,2)
-        # loss_clss = F.nll_loss(clss_pred, clss_label)
+        loss_clss = F.nll_loss(clss_pred, clss_label)
         
         pred_pos = torch.index_select(clss_pred, 0, pos)
         pred_neg = torch.index_select(clss_pred, 0, neg)
-        loss_clss = torch.max(pred_neg) - torch.mean(pred_pos)
+        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
 
         ######################################   
         deltas_pred = delta.view(4,-1)
         diff = (deltas_pred - deltas_label).abs().sum(dim=0)
         loss_delta = torch.index_select(diff, 0, pos).mean()
 
-        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.2f}'\
+        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.5f}'\
                 .format(torch.max(pred_pos).cpu().data.numpy(),\
                         torch.max(pred_neg).cpu().data.numpy(),\
                         loss_clss.cpu().data.numpy(),\
                         loss_delta.cpu().data.numpy()))
         return loss_delta
+        return loss_clss
         return loss_clss + loss_delta
         
     def show_label(self, labels, gt_bbox):
@@ -305,7 +332,7 @@ class AttackWrapper(object):
         ax = axes[0,0]
         ax.set_title('Result')
         res_cx, res_cy, res_w, res_h = track_res
-        ax.imshow(self.x_crop.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
+        ax.imshow(x_crop.data.squeeze().cpu().numpy().transpose(1,2,0).astype(int))
         rect = patches.Rectangle((res_cx-res_w/2, res_cy-res_h/2), res_w, res_h, linewidth=1, edgecolor='r', facecolor='none')
         ax.add_patch(rect)
 
@@ -338,6 +365,40 @@ class AttackWrapper(object):
 
         plt.pause(0.01)
 
+    def show_pscore_delta(self, pscore, delta, track_bbox, fig_num='pscore_delta'):
+        if torch.is_tensor(delta):
+            delta = delta.detach().cpu().numpy()
+        if not len(delta.shape) == 3:
+            delta = delta.reshape((-1, 4, 3125))
+        if type(track_bbox) != np.array:
+            track_bbox = np.array(track_bbox).reshape(-1, 4)
+        # anchor = self.model.all_anchors.detach().cpu().numpy()
+        anchor = self.state['p'].anchor
+        cx = delta[:, 0, :] * anchor[:, 2] + anchor[:, 0]
+        cy = delta[:, 1, :] * anchor[:, 3] + anchor[:, 1]
+        w = np.exp(delta[:, 2, :]) * anchor[:, 2]
+        h = np.exp(delta[:, 3, :]) * anchor[:, 3]
+
+        iou_list = list()
+        for i in range(track_bbox.shape[0]):
+            tx, ty, tw, th = track_bbox[i]
+            tcx, tcy = tx+tw/2, ty+th/2
+            overlap = IoU(center2corner(np.array((cx[i]+127,cy[i]+127,w[i],h[i]))), center2corner(np.array((tcx,tcy,tw,th))))
+            iou_list.append(overlap)
+        ious = np.array(iou_list) # (B, 3125)
+        ious_img = ious.mean(axis=0).reshape(-1, 25)# (B*5, 3125)
+
+        fig, axes = plt.subplots(1,2,num=fig_num)
+        ax = axes[0]
+        ax.set_title('score')
+        ax.imshow(pscore.detach().reshape(-1, 3125).mean(dim=0).reshape(-1, 25).cpu().numpy(),
+                vmin=0, vmax=1)
+        ax = axes[1]
+        ax.set_title('delta')
+        ax.imshow(ious_img, vmin=0, vmax=1)
+        plt.pause(0.001)
+
+        return ious, ious_img
 
 def norms(Z):
     """Compute norms over all but the first dimension"""
