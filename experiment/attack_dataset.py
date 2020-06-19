@@ -8,7 +8,7 @@ import numpy as np
 
 class AttackDataset(Dataset):
 
-    def __init__(self, root_dir='data/Human1', step=10, transform=None):
+    def __init__(self, root_dir='data/Car1', step=1, transform=None):
         self.root_dir = root_dir
         self.img_names = sorted(glob.glob(join(root_dir, 'imgs', '*.jp*')))
 

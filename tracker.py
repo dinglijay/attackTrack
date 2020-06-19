@@ -58,7 +58,7 @@ class SubWindow(torch.nn.Module):
             im = torch.narrow(im, 2, context_ymin, context_ymax-context_ymin+1)
             im = torch.narrow(im, 3, context_xmin, context_xmax-context_xmin+1)
             im_sub = F.pad(im, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg) 
-            im_sub = F.interpolate(im_sub, size=out_size) #, mode='bilinear')
+            im_sub = F.interpolate(im_sub, size=out_size, mode='bilinear')
             out_ims.append(im_sub)
         
         return torch.cat(out_ims)
@@ -78,8 +78,8 @@ class PenaltyLayer(torch.nn.Module):
         super(PenaltyLayer, self).__init__()
 
         self.anchor = torch.nn.Parameter(anchor, requires_grad=False)
-        self.penalty_k = torch.nn.Parameter(torch.tensor(p.penalty_k), requires_grad=False)
-        self.window_influence = torch.nn.Parameter(torch.tensor(p.window_influence), requires_grad=False)
+        self.penalty_k = p.penalty_k
+        self.window_influence = p.window_influence
  
         if p.windowing == 'cosine':
             window = np.outer(np.hanning(p.score_size), np.hanning(p.score_size))
@@ -99,7 +99,7 @@ class PenaltyLayer(torch.nn.Module):
         delta = delta.clone().detach().view(B, 4, -1)
         score = F.softmax(score.view(B, 2, -1), dim=1)[:,1]
 
-        anchor = self.anchor.clone().detach().requires_grad_(False)
+        anchor = self.anchor
         delta[:, 0, :] = delta[:, 0, :] * anchor[:, 2] + anchor[:, 0]
         delta[:, 1, :] = delta[:, 1, :] * anchor[:, 3] + anchor[:, 1]
         delta[:, 2, :] = torch.exp(delta[:, 2, :]) * anchor[:, 2]
@@ -195,7 +195,7 @@ class Tracker(Custom):
 
 def bbox2center_sz(bbox):
     x, y, w, h = bbox.split(1, dim=1)
-    pos = torch.cat([x+w/2, y+h/2], dim=1)
+    pos = torch.cat([x+w//2, y+h//2], dim=1)
     sz = torch.cat([w, h], dim=1)
     return pos, sz
 

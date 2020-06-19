@@ -101,7 +101,7 @@ def warp_patch(patch_tensor, img_tensor, bbox_dest):
     '''
     B = bbox_dest.shape[0]
 
-    x, y, w, h = 0, 0, patch_tensor.shape[2], patch_tensor.shape[1]
+    x, y, w, h = 0, 0, patch_tensor.shape[-1], patch_tensor.shape[-2]
     points_src = torch.FloatTensor([[[x, y], [x+w-1, y], [x, y+h-1], [x+w-1, y+h-1],]])
     points_src = points_src.expand(bbox_dest.shape[0],4,2).to(img_tensor.device)
     

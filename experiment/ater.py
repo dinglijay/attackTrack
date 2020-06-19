@@ -54,7 +54,7 @@ class PatchTrainer(object):
         self.model = siammask
 
         # Setup Dataset
-        self.dataset = AttackDataset()
+        self.dataset = AttackDataset('data/Human2')
 
     def get_tracking_result(self, template_img, template_bbox, search_img, search_bbox, out_layer='score'):
         device = self.device
@@ -153,9 +153,10 @@ class PatchTrainer(object):
         mask_pos = (ious_label>0.6)
         loss_clss = (torch.max(pscore*mask_pos, dim=1)[0] - torch.max(pscore*mask_neg, dim=1)[0]).mean()
 
-        # target = np.array([-120, -120, 2000, 2000])
+        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
+        # target = np.array([-1, -, 2000, 2000])
         # diff = delta.permute(0,2,1) - torch.from_numpy(target).to(self.device)
-        target = np.array([0, 0])
+        target = np.array([1, 1])
         diff = delta.permute(0,2,1)[...,2:] - torch.from_numpy(target).to(self.device)
         idx = torch.topk(pscore, k=10, dim=1)[1]
         diff = diff.abs().mean(dim=2) # (B, 3125)
@@ -164,16 +165,13 @@ class PatchTrainer(object):
             diffs.append(diff[i].take(idx[i]) )
         loss_delta = torch.stack(diffs).mean()
 
-        print('Loss -> loss_clss[0]: {:.5f}, loss_clss[1]: {:.5f}, loss_delta: {:.5f}'.format(
-              diffs[0].detach().mean().cpu().numpy(),
-              diffs[1].detach().mean().cpu().numpy(),
-              loss_delta.detach().cpu().numpy() ))
+        print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
 
         # print('Loss -> loss_clss: {:.5f}, loss_delta: {:.5f}'.format(
         #       loss_clss.cpu().data.numpy(),
         #       loss_delta.cpu().data.numpy() ))
 
-        return 0.1*loss_delta
+        return loss_delta
         return loss_clss
         # return loss_clss + 0.01*loss_delta
 
@@ -203,9 +201,13 @@ class PatchTrainer(object):
         clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
         delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
 
-        diff = (delta - deltas_label).abs().mean(dim=1)
-        mask_pos = (ious_label > 0.3)
-        loss_delta = (diff * mask_pos).sum() / mask_pos.sum()
+        pos = clss_label.squeeze().eq(1).nonzero().squeeze().cuda()
+        ######################################   
+        deltas_pred = delta.view(4,-1)
+        deltas_label = deltas_label.view(4, -1)
+        diff = (deltas_pred - deltas_label).abs().sum(dim=0)
+        loss_delta = torch.index_select(diff, 0, pos).mean()
+
         print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
         return -loss_delta
 
@@ -235,10 +237,10 @@ class PatchTrainer(object):
 
         # Setup attacker cfg
         num_iters = 1000
-        adam_lr = 1
+        adam_lr = 100
         mu, sigma = 127, 5
-        patch_sz = (100, 70)
-        label_thr_iou = 0.01
+        patch_sz = (100, 75)
+        label_thr_iou = 0.2
         pert_sz_ratio = (0.6, 0.3)
         BATCHSIZE = 1
 
@@ -251,6 +253,7 @@ class PatchTrainer(object):
 
         # Tracking and Label
         data_track = (template_img, template_bbox, search_img, template_bbox)
+        # with torch.no_grad():
         pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
         
         # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
@@ -279,11 +282,11 @@ class PatchTrainer(object):
             pert_data = (patch_template, template_bbox, patch_search, template_bbox)
             pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
     
-            if i%30==0:
+            if i%10==0:
                 self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
                 self.show_attack_plt(pscore, bbox, bbox_src)
                 
-            loss = self.loss_delta(pscore, delta, labels)
+            loss = self.loss(pscore, delta, labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
