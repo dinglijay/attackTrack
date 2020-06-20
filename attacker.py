@@ -41,8 +41,8 @@ class AttackWrapper(object):
             return self.gen_xcrop()
         
     def gen_template(self):
-        num_iters = 100
-        adam_lr = 100
+        num_iters = 500
+        adam_lr = 10
         mu, sigma = 127, 5
         label_thr_iou = 0.2
         pert_sz_ratio = (0.6, 0.3)
@@ -97,7 +97,7 @@ class AttackWrapper(object):
             #     self.show_pscore_delta(score_data, delta_data, track_res_data)
             #     self.show_attacking(track_res, score_res, pscore_res, template, x_crop)
 
-            loss = -self.loss2(score, delta, pscore_res, labels)
+            loss = self.loss2(score, delta, pscore_res, labels)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -270,36 +270,47 @@ class AttackWrapper(object):
 
         clss_label, deltas_label, ious = labels
 
-        clss_label = torch.from_numpy(clss_label).cuda()
-        pos = clss_label.data.eq(1).nonzero().squeeze().cuda()
-        neg = clss_label.data.eq(0).nonzero().squeeze().cuda()
-        deltas_label = torch.tensor(deltas_label, device='cuda')
+        # clss_label = torch.from_numpy(clss_label).cuda()
+        # pos = clss_label.data.eq(1).nonzero().squeeze().cuda()
+        # neg = clss_label.data.eq(0).nonzero().squeeze().cuda()
+        # deltas_label = torch.tensor(deltas_label, device='cuda')
 
-        ######################################
-        b, a2, h, w = score.size()
-        assert b==1
-        score = score.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
-        # clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
-        clss_pred = F.log_softmax(score, dim=4).view(-1,2)
-        loss_clss = F.nll_loss(clss_pred, clss_label)
+        # ######################################
+        # b, a2, h, w = score.size()
+        # assert b==1
+        # score = score.view(b, 2, a2//2, h, w).permute(0, 2, 3, 4, 1).contiguous()
+        # # clss_pred = F.softmax(score, dim=4).view(-1,2)[...,1]
+        # clss_pred = F.log_softmax(score, dim=4).view(-1,2)
+        # loss_clss = F.nll_loss(clss_pred, clss_label)
         
-        pred_pos = torch.index_select(clss_pred, 0, pos)
-        pred_neg = torch.index_select(clss_pred, 0, neg)
-        # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
+        # pred_pos = torch.index_select(clss_pred, 0, pos)
+        # pred_neg = torch.index_select(clss_pred, 0, neg)
+        # # loss_clss = torch.max(pred_neg) - torch.max(pred_pos)
 
-        ######################################   
-        deltas_pred = delta.view(4,-1)
-        diff = (deltas_pred - deltas_label).abs().sum(dim=0)
-        loss_delta = torch.index_select(diff, 0, pos).mean()
+        # ######################################   
+        # deltas_pred = delta.view(4,-1)
+        # diff = (deltas_pred - deltas_label).abs().sum(dim=0)
+        # loss_delta = torch.index_select(diff, 0, pos).mean()
 
-        print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.5f}'\
-                .format(torch.max(pred_pos).cpu().data.numpy(),\
-                        torch.max(pred_neg).cpu().data.numpy(),\
-                        loss_clss.cpu().data.numpy(),\
-                        loss_delta.cpu().data.numpy()))
+        # print('Loss -> pred_pos: {:.2f}, pred_neg: {:.2f}, clss: {:.2f}, delta: {:.5f}'\
+        #         .format(torch.max(pred_pos).cpu().data.numpy(),\
+        #                 torch.max(pred_neg).cpu().data.numpy(),\
+        #                 loss_clss.cpu().data.numpy(),\
+        #                 loss_delta.cpu().data.numpy()))
+
+
+        target = np.array([1, 1])
+        deltas_pred = delta.view(-1,4)
+        diff = deltas_pred[..., 2:] - torch.from_numpy(target).cuda()
+        diff = diff.abs().mean(dim=1) # (3125)
+        pscore_res = torch.from_numpy(pscore_res).cuda()
+        idx = torch.topk(pscore_res, k=10, dim=0)[1]
+        loss_delta = diff.take(idx).mean()
+
+        print('loss_delta: {:.5f} '.format(loss_delta.cpu().data.numpy()))
+        
         return loss_delta
-        return loss_clss
-        return loss_clss + loss_delta
+
         
     def show_label(self, labels, gt_bbox):
         clss, _, ious = labels
