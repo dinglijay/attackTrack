@@ -17,6 +17,7 @@ from tracker import Tracker, bbox2center_sz
 from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp, warp_patch
 from attack_dataset import AttackDataset
 from transform import TotalVariation
+from tmp import rand_shift
 
 from matplotlib import pyplot as plt
 
@@ -61,13 +62,13 @@ class PatchTrainer(object):
         self.total_variation = TotalVariation().to(self.device)
         
 
-    def get_tracking_result(self, template_img, template_bbox, search_img, search_bbox, out_layer='score'):
+    def get_tracking_result(self, template_img, template_bbox, search_img, track_bbox, out_layer='score'):
         device = self.device
         model = self.model
         p = self.p
 
         pos_z, size_z = bbox2center_sz(template_bbox)
-        pos_x, size_x = bbox2center_sz(search_bbox)
+        pos_x, size_x = bbox2center_sz(track_bbox)
 
         model.template(template_img.to(device),
                        pos_z.to(device),
@@ -159,7 +160,7 @@ class PatchTrainer(object):
         target = np.array([1, 1])
         diff = delta.permute(0,2,1)[...,2:] - torch.from_numpy(target).to(self.device)
         diff = diff.abs().mean(dim=2) # (B, 3125)
-        idx = torch.topk(pscore, k=10, dim=1)[1]
+        idx = torch.topk(pscore, k=15, dim=1)[1]
 
         diffs = list()
         for i in range(diff.shape[0]):
@@ -204,40 +205,21 @@ class PatchTrainer(object):
         print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
         return -loss_delta
 
-    def loss_delta2(self, pscore, delta, labels):
-        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
-        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
-
-        diff = (delta - deltas_label).abs().sum(dim=1)
-        weight = pscore.detach().view(diff.shape)
-        loss_delta = (diff * weight).mean()
-
-        print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
-        return -loss_delta
-
-    def loss_delta3(self, pscore, delta, labels):
-        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
-        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
-        pos = clss_label.eq(1).nonzero()
-
-        diff = (delta - deltas_label).abs().sum(dim=1)
-        loss_delta = torch.index_select(diff, 0, pos).mean()
-        print('Loss -> loss_delta: {:.5f}'.format(loss_delta.cpu().data.numpy() ))
-        return -loss_delta
-
     def attack(self):
         device = self.device
 
         # Setup attacker cfg
-        num_iters = 300
-        adam_lr = 10
+
         mu, sigma = 127, 5
         patch_sz = (100, 75)
         label_thr_iou = 0.2
         pert_sz_ratio = (0.6, 0.3)
+        shift_pos, shift_wh = 0.2, 1.2
 
-        BATCHSIZE = 2
-        n_epochs = 10
+        num_iters = 30
+        adam_lr = 10
+        BATCHSIZE = 35
+        n_epochs = 20
         dataloader = DataLoader(self.dataset, 
                                 batch_size=BATCHSIZE,
                                 shuffle=True)
@@ -255,7 +237,8 @@ class PatchTrainer(object):
                 template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
                 # Tracking and Label
-                data_track = (template_img, template_bbox, search_img, template_bbox)
+                track_bbox = rand_shift(search_bbox, shift_pos, shift_wh)
+                data_track = (template_img, template_bbox, search_img, track_bbox)
                 # with torch.no_grad():
                 pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
                 
@@ -277,7 +260,7 @@ class PatchTrainer(object):
                     patch_template = torch.where(mask_template==1, patch_warped_template, template_img)
                     patch_search = torch.where(mask_search==1, patch_warped_search, search_img)
 
-                    pert_data = (patch_template, template_bbox, patch_search, template_bbox)
+                    pert_data = (patch_template, template_bbox, patch_search, track_bbox)
                     pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
                             
                     loss_delta = self.loss(pscore, delta, labels)
@@ -285,11 +268,11 @@ class PatchTrainer(object):
                     loss_tv = torch.max(tv, torch.tensor(2.5).to(device))
                     loss = loss_delta + loss_tv
                     
-                    if i%20==0:
-                        self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
-                        self.show_attack_plt(pscore, bbox, bbox_src, patch)
-                        print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
-                        epoch+1, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
+                    if i==0:
+                    #     self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
+                    #     self.show_attack_plt(pscore, bbox, bbox_src, patch)
+                        print('epoch {:} Batch Start -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
+                        epoch, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
                     
                     optimizer.zero_grad()
                     loss.backward()
@@ -297,8 +280,8 @@ class PatchTrainer(object):
                     patch.data = (patch.data).clamp(0, 255)
                 plt.show()
 
-                # print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
-                #         epoch+1, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
+                print('epoch {:}  Batch  End -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
+                        epoch, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
 
         return kornia.tensor_to_image(patch.detach().byte())
 

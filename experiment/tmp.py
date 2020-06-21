@@ -1,57 +1,49 @@
+import torch
+import numpy as np
+from matplotlib import pyplot as plt
+from matplotlib import patches
 
+from tracker import bbox2center_sz
 
+def rand_shift(bbox, shift_pos=0.5, shift_wh=0.5):
+    ''' Random shift and scale the bbox
+    shift_pos is maximum offset of x and y [-shift_pos, shift_pos]
+    shift_wh is maximum offset of w and h [0, shift_wh]
+    '''
+    B = bbox.shape[0]
+    x, y, w, h = bbox.detach().split(1, dim=1)
+    cx, cy = x+w//2, y+h//2
 
-        pert = torch.tensor(pert, requires_grad=True)
-        # define momentum
-        g_old = torch.zeros_like(pert)
-        lr_moment = 1.0
-        alpha = 1.0 #perturbation step-size
+    delta_x = shift_pos * (2 * torch.rand((B,1), device=bbox.device) - 1)
+    delta_y = shift_pos * (2 * torch.rand((B,1), device=bbox.device) - 1)
+    delta_w = shift_wh * (torch.rand((B,1), device=bbox.device))
+    delta_h = shift_wh * (torch.rand((B,1), device=bbox.device))
 
-        ## after loss.backward(),  get gradient wrt pert, use momentum to update gradient estimates
-        normalized_grad = pert.grad.data / torch.sum(torch.abs(pert.grad.data))
-        g_new = lr_moment * g_old + normalized_grad
-        pert.data = pert.data + alpha * g_new.sign()
-        g_old = g_new
-        pert.grad.data = torch.zeros_like(pert)
-        
-        # fig, ax = plt.subplots(1,1,num='bbox')
-        # ax.imshow(kornia.tensor_to_image(template_img.byte()))
-        # x, y, w, h = template_bbox.squeeze().cpu().numpy()
-        # rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-        # ax.add_patch(rect)
-        # x, y, w, h = bbox_pert_temp.squeeze().cpu().numpy()
-        # rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
-        # ax.add_patch(rect)  
-        # plt.show()
+    cx = cx + w * delta_x 
+    cy = cy + h * delta_y
+    w = w * torch.exp(delta_w)
+    h = h * torch.exp(delta_h)
+    x = cx - w//2
+    y = cy - h//2
 
-        # # #########################################################33
-        # fig, axes = plt.subplots(2,2,num='imgs')
-        # ax = axes[0,0]
-        # ax.set_title('template_img')
-        # ax.imshow(kornia.tensor_to_image(template_img.byte()))
-        # x, y, w, h = template_bbox.squeeze().cpu().numpy()
-        # rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-        # ax.add_patch(rect)
-        
-        # ax = axes[0,1]
-        # ax.set_title('search_img')
-        # ax.imshow(kornia.tensor_to_image(search_img.byte()))
-        # x, y, w, h = search_bbox.squeeze().cpu().numpy()
-        # rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
-        # ax.add_patch(rect) 
+    return torch.cat([x, y, w, h], dim=1).to(bbox.dtype)
 
-        # ax = axes[1,0]
-        # ax.set_title('template_mask')
-        # ax.imshow(kornia.tensor_to_image((template_img*mask_template).byte()))
-        # x, y, w, h = bbox_pert_temp.squeeze().cpu().numpy()
-        # rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
-        # ax.add_patch(rect)
+if __name__ == "__main__":
+    pass
 
-        # ax = axes[1,1]
-        # ax.set_title('search_img')
-        # ax.imshow(kornia.tensor_to_image((search_img*mask_search).byte()))
-        # x, y, w, h = bbox_pert_xcrop.squeeze().cpu().numpy()
-        # rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
-        # ax.add_patch(rect)
-        # plt.show()
-        
+    search_bbox = torch.tensor([[201, 291, 102, 312]], device='cuda:0')
+    # search_bbox = torch.tensor([[201, 291, 102, 312], [257, 274, 154, 456]], device='cuda:0')
+
+    fig, ax = plt.subplots(1,1,num='bbox')
+    for i in range(100):
+        track_box = rand_shift(search_bbox)
+        ax.imshow(np.zeros((960, 540, 3)))
+        for i in range(search_bbox.shape[0]):
+            x, y, w, h = search_bbox[i].cpu().numpy()
+            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')
+            ax.add_patch(rect)
+            x, y, w, h = track_box[i].cpu().numpy()
+            rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='b', facecolor='none')
+            ax.add_patch(rect) 
+            plt.pause(0.001) 
+    plt.show()

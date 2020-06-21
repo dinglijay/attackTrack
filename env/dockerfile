@@ -2,7 +2,7 @@ FROM nvidia/cuda:10.1-cudnn7-devel-ubuntu18.04
 
 ARG SSH_PUBKEY
 RUN apt-get -y update && \
-    apt-get -y install git openssh-server python3-pip && \
+    apt-get -y install screen git openssh-server python3-pip && \
     mkdir -p /root/.ssh && \
     echo "$SSH_PUBKEY" > /root/.ssh/authorized_keys && \
     echo 'X11UseLocalhost no' >> /etc/ssh/sshd_config

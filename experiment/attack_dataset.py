@@ -64,9 +64,9 @@ class AttackDataset(Dataset):
         return len(self.img_names) - self.step 
 
     def __getitem__(self, idx):
-        template_idx = idx
+        template_idx = 0
         search_idx = idx + self.step
-        print(self.img_names[template_idx], self.img_names[search_idx])
+        # print(self.img_names[template_idx], self.img_names[search_idx])
         
         template_img = self.imgs[template_idx]
         search_img = self.imgs[search_idx]

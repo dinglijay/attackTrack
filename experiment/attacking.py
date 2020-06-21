@@ -13,6 +13,7 @@ from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, bbox2center_sz
 from attack_dataset import AttackDataset
+from masks import warp_patch, scale_bbox, get_bbox_mask
 
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
@@ -41,12 +42,12 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
     scale_x = model.penalty.get_scale_x(size_x)
 
     assert pscore.shape[0]==1
-    tuple(map(lambda x: x.squeeze_().numpy(), [pos_x, size_x, template_bbox, search_bbox]))
+    tuple(map(lambda x: x.squeeze_().cpu().numpy(), [pos_x, size_x, template_bbox, search_bbox]))
     template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
     search_img = np.ascontiguousarray(kornia.tensor_to_image(search_img.byte()))
 
     best_pscore_id = np.argmax(pscore.squeeze().detach().cpu().numpy())
-    pred_in_img = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] / scale_x
+    pred_in_img = delta.squeeze().detach().cpu().numpy()[:, best_pscore_id] / scale_x.cpu().numpy()
     lr = pscore_size.squeeze().detach().cpu().numpy()[best_pscore_id] * p.lr  # lr for OTB
 
     res_x = pred_in_img[0] + pos_x[0]
@@ -75,7 +76,6 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
     key = cv2.waitKey(1)
 
     return x, y, x2-x, y2-y
-
 if __name__ == '__main__':
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -95,6 +95,11 @@ if __name__ == '__main__':
     # Setup Dataset
     dataloader = DataLoader(AttackDataset(root_dir='data/Human2', step=1), batch_size=100)
 
+    # Load Patch
+    patch = cv2.imread('patch.png')
+    patch = kornia.image_to_tensor(patch).to(torch.float) # (3, H, W)
+    patch = patch.clone().detach().requires_grad_(True) # (3, H, W)
+
     cv2.namedWindow("SiamMask", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
 
@@ -102,7 +107,26 @@ if __name__ == '__main__':
     for data in dataloader:
         data = list(map(lambda x: x.split(1), data))
         for template_img, template_bbox, search_img, search_bbox in zip(*data):
+            # Move tensor to device
+            data_slice = (template_img, template_bbox, search_img, search_bbox, patch)
+            template_img, template_bbox, search_img, search_bbox, patch = tuple(map(lambda x: x.to(device), data_slice))
+
+            # Generate masks
+            pert_sz_ratio = (0.6, 0.3)
+            im_shape = template_img.shape[2:]
+            patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
+            patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
+            mask_template = get_bbox_mask(shape=im_shape, bbox=patch_pos_temp, mode='tensor').to(device)
+            mask_search = get_bbox_mask(shape=im_shape, bbox=patch_pos_search, mode='tensor').to(device)
+
+            # Apply patch
+            patch_warped_template = warp_patch(patch, template_img, patch_pos_temp)
+            patch_warped_search = warp_patch(patch, search_img, patch_pos_search)
+            patch_template = torch.where(mask_template==1, patch_warped_template, template_img)
+            patch_search = torch.where(mask_search==1, patch_warped_search, search_img)
+
+            # Tracking
             track_bbox = torch.tensor(bbox).unsqueeze_(dim=0) if bbox else template_bbox
-            bbox = track(model, p, template_img, template_bbox, search_img, track_bbox)
+            bbox = track(model, p, patch_template, template_bbox, patch_search, track_bbox)
 
     

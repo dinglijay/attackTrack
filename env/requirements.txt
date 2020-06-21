@@ -12,3 +12,4 @@ tqdm
 tensorboardX
 opencv_python
 kornia
+tensorboard
