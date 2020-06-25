@@ -14,7 +14,7 @@ from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, corner2center, center2corner
 
 from tracker import Tracker, bbox2center_sz
-from masks import get_bbox_mask, get_circle_mask, scale_bbox, warp, warp_patch
+from masks import get_bbox_mask_tv, get_circle_mask, scale_bbox, warp, warp_patch
 from attack_dataset import AttackDataset
 from transform import TotalVariation
 from tmp import rand_shift
@@ -22,13 +22,6 @@ from tmp import rand_shift
 from matplotlib import pyplot as plt
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
-parser.add_argument('--resume', default='', type=str, required=True,
-                    metavar='PATH',help='path to latest checkpoint (default: none)')
-parser.add_argument('--config', dest='config', default='config_davis.json',
-                    help='hyper-parameter of SiamMask in json format')
-parser.add_argument('--base_path', default='../../data/tennis', help='datasets')
-parser.add_argument('--gt_file', default=None, type=str, help='ground truth txt file')
-parser.add_argument('--cpu', action='store_true', help='cpu mode')
 args = parser.parse_args()
 
 
@@ -57,9 +50,6 @@ class PatchTrainer(object):
 
         # Setup Dataset
         self.dataset = AttackDataset('data/Human2')
-
-        # Setup Transformation
-        self.total_variation = TotalVariation().to(self.device)
         
 
     def get_tracking_result(self, template_img, template_bbox, search_img, track_bbox, out_layer='score'):
@@ -151,15 +141,19 @@ class PatchTrainer(object):
         else:
             return np.array(cls_list), np.array(delta_list), np.array(iou_list)
 
-    def loss(self, pscore, delta, labels):
-        clss_label, deltas_label, ious_label = tuple(map(lambda x: torch.from_numpy(x).to(self.device), labels))
-        delta = self.model.rpn_pred_loc.view(deltas_label.shape) # (B, 4, 3125)
+    def loss(self, pscore, margin=0.7):
+        ''' Note that delta is from model.rpn_pred_loc 
+        Loss = max(L1(delta, target), margin), among topK bboxs.
+        Input: pscore (B, 3125)
+        '''
+        delta = self.model.rpn_pred_loc.view((-1, 4, 3125)) # (B, 4, 3125)
 
-        # target = np.array([-1, -, 2000, 2000])
-        # diff = delta.permute(0,2,1) - torch.from_numpy(target).to(self.device)
-        target = np.array([1, 1])
-        diff = delta.permute(0,2,1)[...,2:] - torch.from_numpy(target).to(self.device)
-        diff = diff.abs().mean(dim=2) # (B, 3125)
+        # target = torch.tensor([1.0, 1.0, -1.0, -1.0], device=self.device)
+        # diff = delta.permute(0,2,1)[...] - target # (B, 3125, 4)
+        target = torch.tensor([1.0, 1.0], device=self.device)
+        diff = delta.permute(0,2,1)[..., 2:] - target # (B, 3125, 2)
+        diff = torch.max(diff.abs(), torch.tensor(margin, device=self.device))
+        diff = diff.mean(dim=2) # (B, 3125)
         idx = torch.topk(pscore, k=15, dim=1)[1]
 
         diffs = list()
@@ -209,25 +203,28 @@ class PatchTrainer(object):
         device = self.device
 
         # Setup attacker cfg
-
         mu, sigma = 127, 5
-        patch_sz = (100, 75)
+        patch_sz = (200, 150)
         label_thr_iou = 0.2
         pert_sz_ratio = (0.6, 0.3)
-        shift_pos, shift_wh = 0.2, 1.2
+        shift_pos, shift_wh = (-0.3, 0.3), (-0.1, 2.2)
+        loss_delta_margin = 0.5
 
         num_iters = 30
         adam_lr = 10
         BATCHSIZE = 35
-        n_epochs = 20
-        dataloader = DataLoader(self.dataset, 
-                                batch_size=BATCHSIZE,
-                                shuffle=True)
+        n_epochs = 100
+
+        # Transformation Aug
+        trans = kornia.augmentation.ColorJitter(0.1, 0, 0, 0)
+        avg_filter = kornia.filters.GaussianBlur2d((7,7), (3,3))
+        total_variation = kornia.losses.TotalVariation()
+
+        dataloader = DataLoader(self.dataset, batch_size=BATCHSIZE, shuffle=True)
+        # dataloader = DataLoader(self.dataset, batch_size=BATCHSIZE, shuffle=False)
 
         # Generate patch and setup optimizer
-        patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0,255)
-        # patch = cv2.resize(cv2.imread('data/patchnew0.jpg'), (patch_sz[1], patch_sz[0])) # W, H
-        # patch = kornia.image_to_tensor(patch).to(torch.float)
+        patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0.1,255)
         patch = patch.clone().detach().to(self.device).requires_grad_(True) # (3, H, W)
         optimizer = torch.optim.Adam([patch], lr=adam_lr)
 
@@ -236,50 +233,62 @@ class PatchTrainer(object):
                 # Move tensor to device
                 template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
-                # Tracking and Label
-                track_bbox = rand_shift(search_bbox, shift_pos, shift_wh)
-                data_track = (template_img, template_bbox, search_img, track_bbox)
-                # with torch.no_grad():
-                pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
+                # Gen tracking bbox  # track_bbox = template_bbox
+                track_bbox = rand_shift(template_img.shape[-2:], search_bbox, shift_pos, shift_wh)
                 
-                # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
-                labels = self.get_label(bbox_src, thr_iou=label_thr_iou, need_iou=True)
-                self.bbox_src = bbox_src
+                # # Tracking and get label
+                # data_track = (template_img, template_bbox, search_img, track_bbox)
+                # pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
+                # labels = self.get_label(bbox_src, thr_iou=label_thr_iou, need_iou=True)
+                # self.bbox_src = bbox_src
         
                 # Generate masks
                 im_shape = template_img.shape[2:]
                 patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
                 patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
-                mask_template = get_bbox_mask(shape=im_shape, bbox=patch_pos_temp, mode='tensor').to(device)
-                mask_search = get_bbox_mask(shape=im_shape, bbox=patch_pos_search, mode='tensor').to(device)
+                mask_template = get_bbox_mask_tv(shape=im_shape, bbox=patch_pos_temp).to(device)
+                mask_search = get_bbox_mask_tv(shape=im_shape, bbox=patch_pos_search).to(device)
+                # mask_template = get_bbox_mask_tv(shape=im_shape, bbox=patch_pos_temp, mode='tensor').to(device)
+                # mask_search = get_bbox_mask_tv(shape=im_shape, bbox=patch_pos_search, mode='tensor').to(device)
+
+                # Transfermation on patch, (N, W, H) --> (B, N, W, H)
+                B = template_img.shape[0]
+                patch_ = patch
+                # patch_ = trans((patch / 255.0).expand(B, -1, -1, -1)) * 255.0
 
                 # Iteratively opti pert
                 for i in range(num_iters):
-                    patch_warped_template = warp_patch(patch, template_img, patch_pos_temp)
-                    patch_warped_search = warp_patch(patch, search_img, patch_pos_search)
+                    # patch_t = avg_filter(patch_)
+                    patch_t = patch_
+
+                    patch_warped_template = warp_patch(patch_t, template_img, patch_pos_temp)
+                    patch_warped_search = warp_patch(patch_t, search_img, patch_pos_search)
+                    # patch_template = torch.where(patch_==0, template_img, patch_warped_template)
+                    # patch_search = torch.where(patch_==0, search_img, patch_pos_search)
                     patch_template = torch.where(mask_template==1, patch_warped_template, template_img)
                     patch_search = torch.where(mask_search==1, patch_warped_search, search_img)
 
                     pert_data = (patch_template, template_bbox, patch_search, track_bbox)
                     pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
                             
-                    loss_delta = self.loss(pscore, delta, labels)
-                    tv = 0.05 * self.total_variation(patch)
+                    loss_delta = self.loss(pscore, loss_delta_margin)
+                    tv = 0.05 * total_variation(patch)/torch.numel(patch)
                     loss_tv = torch.max(tv, torch.tensor(2.5).to(device))
                     loss = loss_delta + loss_tv
                     
-                    if i==0:
-                    #     self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
-                    #     self.show_attack_plt(pscore, bbox, bbox_src, patch)
-                        print('epoch {:} Batch Start -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
-                        epoch, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
+                    # if i==0:
+                    #     # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
+                    #     # self.show_attack_plt(pscore, bbox, bbox_src, patch)
+                    #     # plt.pause(0.001)
+                    #     print('epoch {:} Batch Start -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
+                    #     epoch, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
                     
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     patch.data = (patch.data).clamp(0, 255)
-                plt.show()
 
+                cv2.imwrite('patch_sm1.png', kornia.tensor_to_image(patch.detach().byte()))
                 print('epoch {:}  Batch  End -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
                         epoch, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
 
@@ -303,7 +312,7 @@ class PatchTrainer(object):
             overlap = IoU(center2corner(np.array((cx[i]+127,cy[i]+127,w[i],h[i]))), center2corner(np.array((tcx,tcy,tw,th))))
             iou_list.append(overlap)
         ious = np.array(iou_list) # (B, 3125)
-        ious_img = ious.mean(axis=0).reshape(-1, 25)# (B*5, 3125)
+        ious_img = ious.mean(axis=0).reshape(-1, 25)# (B*5, 25)
 
         fig, axes = plt.subplots(1,2,num=fig_num)
         ax = axes[0]
@@ -311,7 +320,7 @@ class PatchTrainer(object):
         ax.imshow(pscore.detach().reshape(-1, 3125).mean(dim=0).reshape(-1, 25).cpu().numpy(),
                 vmin=0, vmax=1)
         ax = axes[1]
-        ax.set_title('delta')
+        ax.set_title('iou: {:.2f}'.format(ious.max()))
         ax.imshow(ious_img, vmin=0, vmax=1)
         plt.pause(0.001)
 
@@ -342,13 +351,18 @@ class PatchTrainer(object):
         """
         Generate a random patch as a starting point for optimization.
         """
-        adv_patch_cpu = (mu + sigma * torch.randn(3, size[0], size[1])).clamp(0,255)
+        # adv_patch_cpu = (mu + sigma * torch.randn(3, size[0], size[1])).clamp(0,255)
+        adv_patch_cpu = cv2.resize(cv2.imread('data/patchnew0.jpg'), (size[1], size[0])) # W, H
+        adv_patch_cpu = kornia.image_to_tensor(patch).to(torch.float)
 
         return adv_patch_cpu
 
 if __name__ == '__main__':
     import matplotlib.patches as patches
 
+    args.resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
+    args.config = "../SiamMask/experiments/siammask_sharp/config_davis.json"
+
     trainer = PatchTrainer(args)
     patch = trainer.attack()
-    cv2.imwrite('patch.png', patch)
+    # cv2.imwrite('patch_sm.png', patch)

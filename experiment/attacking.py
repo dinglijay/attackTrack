@@ -13,17 +13,10 @@ from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, bbox2center_sz
 from attack_dataset import AttackDataset
-from masks import warp_patch, scale_bbox, get_bbox_mask
+from masks import warp_patch, scale_bbox, get_bbox_mask_tv
 
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
-parser.add_argument('--resume', default='', type=str, required=True,
-                    metavar='PATH',help='path to latest checkpoint (default: none)')
-parser.add_argument('--config', dest='config', default='config_davis.json',
-                    help='hyper-parameter of SiamMask in json format')
-parser.add_argument('--base_path', default='../../data/tennis', help='datasets')
-parser.add_argument('--gt_file', default=None, type=str, help='ground truth txt file')
-parser.add_argument('--cpu', action='store_true', help='cpu mode')
 args = parser.parse_args()
 
 
@@ -75,8 +68,20 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
     cv2.imshow('SiamMask', search_img)
     key = cv2.waitKey(1)
 
+    global i, save_img
+    if save_img:
+        i += 1
+        status =  cv2.imwrite('./results/res_{:03d}.jpg'.format(i), cv2.resize(search_img, (108,192)))
+        print(status, 'results//res_{:03d}.jpg'.format(i))
+
     return x, y, x2-x, y2-y
+
 if __name__ == '__main__':
+
+    # Setup cf and model file
+    args.resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
+    args.config = "../SiamMask/experiments/siammask_sharp/config_davis.json"
+
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     torch.backends.cudnn.benchmark = True
@@ -93,15 +98,19 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(root_dir='data/Human2', step=1), batch_size=100)
+    dataloader = DataLoader(AttackDataset(root_dir='data/Human1', step=1, test=True), batch_size=100)
 
     # Load Patch
-    patch = cv2.imread('patch.png')
+    patch = cv2.imread('./patch_sm1.png')
     patch = kornia.image_to_tensor(patch).to(torch.float) # (3, H, W)
     patch = patch.clone().detach().requires_grad_(True) # (3, H, W)
 
     cv2.namedWindow("SiamMask", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
+    
+    # For save tracking result as img file
+    i = 0
+    save_img = False
 
     bbox = None
     for data in dataloader:
@@ -116,8 +125,8 @@ if __name__ == '__main__':
             im_shape = template_img.shape[2:]
             patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
             patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
-            mask_template = get_bbox_mask(shape=im_shape, bbox=patch_pos_temp, mode='tensor').to(device)
-            mask_search = get_bbox_mask(shape=im_shape, bbox=patch_pos_search, mode='tensor').to(device)
+            mask_template = get_bbox_mask_tv(shape=im_shape, bbox=patch_pos_temp)
+            mask_search = get_bbox_mask_tv(shape=im_shape, bbox=patch_pos_search)
 
             # Apply patch
             patch_warped_template = warp_patch(patch, template_img, patch_pos_temp)

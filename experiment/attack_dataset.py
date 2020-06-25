@@ -35,7 +35,7 @@ def permutations(iterable, max_dist=10):
 
 class AttackDataset(Dataset):
 
-    def __init__(self, root_dir='data/Human2', step=1, transform=None):
+    def __init__(self, root_dir='data/Human2', step=1, test=False, transform=None):
         self.root_dir = root_dir
         self.img_names = sorted(glob.glob(join(root_dir, 'imgs', '*.jp*')))
         self.imgs = [np.transpose(cv2.imread(im_name).astype(np.float32), (2, 0, 1)) for im_name in self.img_names]
@@ -54,6 +54,7 @@ class AttackDataset(Dataset):
 
         self.transform = transform
         self.step = step
+        self.test = test
     
     def gen_ind_combinations(self):
         n_imgs = len(self.img_names)
@@ -64,7 +65,7 @@ class AttackDataset(Dataset):
         return len(self.img_names) - self.step 
 
     def __getitem__(self, idx):
-        template_idx = 0
+        template_idx = 0 if self.test else np.random.randint(self.__len__())
         search_idx = idx + self.step
         # print(self.img_names[template_idx], self.img_names[search_idx])
         
