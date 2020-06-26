@@ -98,7 +98,7 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(root_dir='data/Human1', step=1, test=True), batch_size=100)
+    dataloader = DataLoader(AttackDataset(root_dir='data/Human2', step=1, test=True), batch_size=100)
 
     # Load Patch
     patch = cv2.imread('./patch_sm1.png')
