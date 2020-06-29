@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import kornia
+import torch.nn.functional as F
 
 def get_circle_mask(shape=(127,127), loc=(64,64), diameter=12, sharpness=40):
     """Return a circular mask of a given shape"""
@@ -134,23 +135,23 @@ def warp_patch(patch_tensor, img_tensor, bbox_dest):
     return patch_warped
 
 
-def add_patch(patch_tensor, img_tensor, bbox_dest):
+def pad_patch(patch_tensor, img_tensor, bbox_dest):
     '''
-    Apply the patch to images.
-    Input: patch_tensor : Tensor (3, h0, w0)
+    Pad the patch to the size of img_tensor.
+    Input: patch_tensor : Tensor ([B, ]3, h, w)
            img_tensor: Tensor(B, 3, H, W) 
            bbox_dest: Tensor(B, 4)
     Output: Tensor (B, 3, H, W)
     '''
     B = bbox_dest.shape[0]
-    masks = list()
-    for i in range(B):
-        size = img_tensor.shape[-2:]
-        pad_h, pad_w = (np.array(size) - np.array(patch_tensor.shape[-2:]) ) / 2
-        mypad = torch.nn.ConstantPad2d((int(pad_w + 0.5), int(pad_w), int(pad_h + 0.5), int(pad_h)), 0)
+    if len(patch_tensor.shape) == 3:
+        patch_tensor = patch_tensor.expand(B, -1, -1, -1)
 
-        masks.append(mypad(patch_tensor.unsqueeze(0)))
-    return torch.cat(masks)
+    size = img_tensor.shape[-2:]
+    pad_h, pad_w = (np.array(size) - np.array(patch_tensor.shape[-2:]) ) / 2
+    patch_paded = F.pad(patch_tensor, pad=(int(pad_w+0.5), int(pad_w), int(pad_h+0.5), int(pad_h)), value=0) 
+
+    return patch_paded
 
 if __name__ == '__main__':
 

@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib import patches
 
 
-def rand_shift(img_hw, bbox, shift_pos=(-0.2, 0.2), shift_wh=(-0.1, 2.5), cor=0.3):
+def rand_shift(img_hw, bbox, shift_pos=(-0.2, 0.2), shift_wh=(-0.9, 0.1), cor=0.3):
     ''' Random shift and scale the bbox
     shift_pos and shift_wh is offset range
     cor is the correlation coefficient of delta_w and delta_h
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     fig, ax = plt.subplots(1,1,num='bbox')
     for i in range(100):
         track_box = rand_shift(img_hw, search_bbox, (-0.3, 0.3), (-0.8, 0.2))
-        ax.imshow(np.zeros((960, 540, 3)))
+        ax.imshow(np.zeros((img_hw[0], img_hw[1], 3)))
         for i in range(search_bbox.shape[0]):
             x, y, w, h = search_bbox[i].cpu().numpy()
             rect = patches.Rectangle((x, y), w, h, linewidth=1, edgecolor='r', facecolor='none')

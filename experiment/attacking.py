@@ -71,7 +71,7 @@ def track(model, p, template_img, template_bbox, search_img, search_bbox):
     global i, save_img
     if save_img:
         i += 1
-        status =  cv2.imwrite('./results/res_{:03d}.jpg'.format(i), cv2.resize(search_img, (108,192)))
+        status =  cv2.imwrite('./results/res_{:03d}.jpg'.format(i), cv2.resize(search_img, (384, 216)))
         print(status, 'results//res_{:03d}.jpg'.format(i))
 
     return x, y, x2-x, y2-y
@@ -98,10 +98,10 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(root_dir='data/Human2', step=1, test=True), batch_size=100)
+    dataloader = DataLoader(AttackDataset(root_dir='data/Human1', step=1, test=True), batch_size=100)
 
     # Load Patch
-    patch = cv2.imread('./patch_sm1.png')
+    patch = cv2.imread('patch_sm.png')
     patch = kornia.image_to_tensor(patch).to(torch.float) # (3, H, W)
     patch = patch.clone().detach().requires_grad_(True) # (3, H, W)
 

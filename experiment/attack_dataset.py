@@ -35,7 +35,7 @@ def permutations(iterable, max_dist=10):
 
 class AttackDataset(Dataset):
 
-    def __init__(self, root_dir='data/Human2', step=1, test=False, transform=None):
+    def __init__(self, root_dir='data/Human2', n_frames=None, step=1, test=False, transform=None):
         self.root_dir = root_dir
         self.img_names = sorted(glob.glob(join(root_dir, 'imgs', '*.jp*')))
         self.imgs = [np.transpose(cv2.imread(im_name).astype(np.float32), (2, 0, 1)) for im_name in self.img_names]
@@ -49,6 +49,9 @@ class AttackDataset(Dataset):
             data = pickle.load(f)
             self.rets = data['ret']
             self.corners = data['corners']
+        
+        if n_frames:
+            self.imgs = self.imgs[:n_frames]
 
         assert len(self.bbox) == len(self.img_names) == self.rets.shape[0] ==self.corners.shape[0]
 
@@ -62,7 +65,7 @@ class AttackDataset(Dataset):
 
 
     def __len__(self):
-        return len(self.img_names) - self.step 
+        return len(self.imgs) - self.step 
 
     def __getitem__(self, idx):
         template_idx = 0 if self.test else np.random.randint(self.__len__())
