@@ -18,7 +18,7 @@ from tracker import Tracker, tracker_init, tracker_track
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
 args = parser.parse_args()
 
-def main(base_path='data/Human2/imgs'):
+def main(base_path='data/Surface5'):
 
     args.base_path = base_path
     args.resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
@@ -40,7 +40,7 @@ def main(base_path='data/Human2/imgs'):
     siammask.eval().to(device)
 
     # Parse Image file
-    img_files = sorted(glob.glob(join(args.base_path, '*.jp*')))
+    img_files = sorted(glob.glob(join(join(args.base_path, 'imgs'), '*.jp*')))
     ims = [cv2.imread(imf) for imf in img_files]
 
     # Select ROI

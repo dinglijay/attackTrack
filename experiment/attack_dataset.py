@@ -45,16 +45,17 @@ class AttackDataset(Dataset):
             split_flag = ',' if ',' in gts[0] else '\t'
             self.bbox = list(map(lambda x: list(map(int, x.rstrip().split(split_flag))), gts))
         
-        with open(join(root_dir, 'corners.dat'), 'rb') as f:
-            data = pickle.load(f)
-            self.rets = data['ret']
-            self.corners = data['corners']
+        # with open(join(root_dir, 'corners.dat'), 'rb') as f:
+        #     data = pickle.load(f)
+        #     self.rets = data['ret']
+        #     self.corners = data['corners']
         
         if n_frames:
             self.imgs = self.imgs[:n_frames]
 
-        assert len(self.bbox) == len(self.img_names) == self.rets.shape[0] ==self.corners.shape[0]
-
+        # assert len(self.bbox) == len(self.img_names) == self.rets.shape[0] ==self.corners.shape[0]
+        assert len(self.bbox) == len(self.img_names)
+        
         self.transform = transform
         self.step = step
         self.test = test
