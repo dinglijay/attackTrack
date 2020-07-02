@@ -102,7 +102,7 @@ if __name__ == '__main__':
     for data in dataloader:
         data = list(map(lambda x: x.split(1), data))
         for template_img, template_bbox, search_img, search_bbox in zip(*data):
-            if bbox: search_bbox = torch.tensor(bbox).unsqueeze_(dim=0)
-            bbox = track(model, p, template_img, template_bbox, search_img, search_bbox)
+            track_bbox = torch.tensor(bbox).unsqueeze_(dim=0) if bbox else template_bbox
+            bbox = track(model, p, template_img, template_bbox, search_img, track_bbox)
 
     

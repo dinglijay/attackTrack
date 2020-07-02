@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import kornia
+import torch.nn.functional as F
 
 def get_circle_mask(shape=(127,127), loc=(64,64), diameter=12, sharpness=40):
     """Return a circular mask of a given shape"""
@@ -40,30 +41,43 @@ def get_bbox_mask(shape=(127,127), bbox=(50,50,20,20), mode='numpy'):
 
     return np.array(masks) if mode=='numpy' else torch.tensor(masks).permute(0,3,1,2)
 
+def get_bbox_mask_tv(shape=(127,127), bbox=(50,50,20,20)):
+    """Return a rectangle mask of a given shape"""
+    masks = list()
+    for i in range(bbox.shape[0]):
+        x,y,w,h = bbox[i]
+        assert (x+w)<shape[1] and (y+h)<shape[0]
+        
+        mask = torch.zeros(shape, device='cuda')
+        mask[y:y+h, x:x+w] = 1
+        mask = mask.expand(3,-1,-1)
+        masks.append(mask)
+    return torch.stack(masks, dim=0)
+
 
 def scale_bbox(bbox, scale_wh):
     # todo: unify operation on tensor and int list
 
     if type(bbox) == np.ndarray or type(bbox) == torch.Tensor:
         bbox = bbox.clone().detach()
-        c_x = bbox[:, 0] + bbox[:, 2]/2
-        c_y = bbox[:, 1] + bbox[:, 3]/2
+        c_x = bbox[:, 0] + bbox[:, 2]//2
+        c_y = bbox[:, 1] + bbox[:, 3]//2
         scale_w, scale_h = scale_wh
         bbox[:, 2] = bbox[:, 2] * scale_w
         bbox[:, 3] = bbox[:, 3] * scale_h
-        bbox[:, 0] = c_x - bbox[:, 2]/2
-        bbox[:, 1] = c_y - bbox[:, 3]/2
+        bbox[:, 0] = c_x - bbox[:, 2]//2
+        bbox[:, 1] = c_y - bbox[:, 3]//2
         return bbox
     else:
         x, y, w, h = bbox
-        c_x = x + w/2
-        c_y = y + h/2
+        c_x = x + w//2
+        c_y = y + h//2
 
         scale_w, scale_h = scale_wh
         w *= scale_w
         h *= scale_h
-        x = c_x - w/2
-        y = c_y - h/2
+        x = c_x - w//2
+        y = c_y - h//2
         return tuple(map(int, (x, y, w, h)))
 
 def warp(pert_tensor, bbox_src, bbox_dest):
@@ -94,7 +108,7 @@ def warp(pert_tensor, bbox_src, bbox_dest):
 def warp_patch(patch_tensor, img_tensor, bbox_dest):
     '''
     Apply the patch to images.
-    Input: patch_tensor : Tensor (3, h0, w0)
+    Input: patch_tensor : Tensor ([B, ]3, h0, w0)
            img_tensor: Tensor(B, 3, H, W) 
            bbox_dest: Tensor(B, 4)
     Output: Tensor (B, 3, H, W)
@@ -113,31 +127,31 @@ def warp_patch(patch_tensor, img_tensor, bbox_dest):
 
     M = kornia.get_perspective_transform(points_src, points_dst).to(img_tensor.device)
 
-    # patch_tensor = patch_tensor.expand(B, -1, -1, -1)
-    patch_tensor = torch.stack([patch_tensor for i in range(B)], dim=0)
+    if len(patch_tensor.shape) == 3:
+        patch_tensor = patch_tensor.expand(B, -1, -1, -1)
     patch_warped = kornia.warp_perspective(patch_tensor, M, (img_tensor.shape[2], img_tensor.shape[3]))
     # res_img = torch.where((patch_warped==0), img_tensor, patch_warped)
 
     return patch_warped
 
 
-def add_patch(patch_tensor, img_tensor, bbox_dest):
+def pad_patch(patch_tensor, img_tensor, bbox_dest):
     '''
-    Apply the patch to images.
-    Input: patch_tensor : Tensor (3, h0, w0)
+    Pad the patch to the size of img_tensor.
+    Input: patch_tensor : Tensor ([B, ]3, h, w)
            img_tensor: Tensor(B, 3, H, W) 
            bbox_dest: Tensor(B, 4)
     Output: Tensor (B, 3, H, W)
     '''
     B = bbox_dest.shape[0]
-    masks = list()
-    for i in range(B):
-        size = img_tensor.shape[-2:]
-        pad_h, pad_w = (np.array(size) - np.array(patch_tensor.shape[-2:]) ) / 2
-        mypad = torch.nn.ConstantPad2d((int(pad_w + 0.5), int(pad_w), int(pad_h + 0.5), int(pad_h)), 0)
+    if len(patch_tensor.shape) == 3:
+        patch_tensor = patch_tensor.expand(B, -1, -1, -1)
 
-        masks.append(mypad(patch_tensor.unsqueeze(0)))
-    return torch.cat(masks)
+    size = img_tensor.shape[-2:]
+    pad_h, pad_w = (np.array(size) - np.array(patch_tensor.shape[-2:]) ) / 2
+    patch_paded = F.pad(patch_tensor, pad=(int(pad_w+0.5), int(pad_w), int(pad_h+0.5), int(pad_h)), value=0) 
+
+    return patch_paded
 
 if __name__ == '__main__':
 
@@ -145,10 +159,10 @@ if __name__ == '__main__':
 
     img = cv2.imread('data/Human1/imgs/0001.jpg')
     img2 = cv2.imread('data/Human1/imgs/0100.jpg')
-    patch = cv2.imread('data/patchnew0.jpg')
     H, W = 400, 300
-    patch = cv2.resize(patch, (W,H)) # W, H
-    bbox = [[419,605,207,595], [410,557,310,856]]
+    patch1 = cv2.resize(cv2.imread('data/patchnew0.jpg'), (W,H))
+    patch2 = cv2.resize(cv2.imread('patches/patch_sm.png'), (W,H))
+    bbox = [[200,200,207,395], [310,157,220,250]]
 
     cv2.namedWindow('img', cv2.WND_PROP_FULLSCREEN)
     x, y, w, h = bbox[0]
@@ -160,16 +174,25 @@ if __name__ == '__main__':
     cv2.rectangle(img2, (x, y), (x+w, y+h), (0, 255, 0), 4)
     cv2.imshow('img2', img2)
 
-    cv2.imshow('patch', patch)
+    cv2.imshow('patch1', patch1)
+    cv2.imshow('patch2', patch2)
 
 
     img_tensor = kornia.image_to_tensor(img).unsqueeze(0).to(torch.float32)
     img_tensor2 = kornia.image_to_tensor(img2).unsqueeze(0).to(torch.float32)
-    patch_tensor = kornia.image_to_tensor(patch).to(torch.float32)
+    patch_tensor1 = kornia.image_to_tensor(patch1).to(torch.float32)
+    patch_tensor2 = kornia.image_to_tensor(patch2).to(torch.float32)
     bbox = torch.tensor(bbox)
     bbox_dest = scale_bbox(bbox, (0.6, 0.3))
-    
-    res_img = warp_patch2(patch_tensor, torch.cat([img_tensor, img_tensor2], 0), bbox_dest)
+
+    mask = get_bbox_mask_tv(img_tensor.shape[-2:], bbox)
+    cv2.namedWindow('mask1', cv2.WND_PROP_FULLSCREEN)
+    cv2.namedWindow('mask2', cv2.WND_PROP_FULLSCREEN)
+    cv2.imshow('mask1', kornia.tensor_to_image(mask[0]))
+    cv2.imshow('mask2', kornia.tensor_to_image(mask[1]))
+
+
+    res_img = warp_patch(torch.stack([patch_tensor1, patch_tensor2], 0), torch.cat([img_tensor, img_tensor2], 0), bbox_dest)
 
     cv2.namedWindow('res_img1', cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow('res_img2', cv2.WND_PROP_FULLSCREEN)

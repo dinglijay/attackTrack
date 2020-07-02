@@ -24,3 +24,9 @@ Adversarial  Attack on Visual Object Tracking
            --gt_file groundtruth_rect.txt \
            --base_path ../DylanTrack/dataset/OTB/Car24/img/
 ```
+## Kornia Bug Fix
+```
+    # kornia.color.hsv.py L140:
+    # avoid gradient to NAN when Backward 
+    s: torch.Tensor = deltac / (v + 1e-20)
+```

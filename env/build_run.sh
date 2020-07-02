@@ -5,6 +5,7 @@ docker run -ti \
         --hostname attackSer2 \
         --name li-attack \
         --gpus 'all' \
+        --shm-size 16g \
         -v /home/li:/workspace \
         -v /mnt/DataServer/li:/DataServer \
         li-attack

@@ -58,7 +58,7 @@ class SubWindow(torch.nn.Module):
             im = torch.narrow(im, 2, context_ymin, context_ymax-context_ymin+1)
             im = torch.narrow(im, 3, context_xmin, context_xmax-context_xmin+1)
             im_sub = F.pad(im, pad=(left_pad, right_pad, top_pad, bottom_pad), mode='constant', value=avg) 
-            im_sub = F.interpolate(im_sub, size=out_size, mode='bilinear')
+            im_sub = F.interpolate(im_sub, size=out_size, mode='bilinear', align_corners=False)
             out_ims.append(im_sub)
         
         return torch.cat(out_ims)
