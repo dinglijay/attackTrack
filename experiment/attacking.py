@@ -104,10 +104,10 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(root_dir='data/Surface5', step=1, test=True), batch_size=100)
+    dataloader = DataLoader(AttackDataset(root_dir='data/Phone1', step=1, test=True), batch_size=100)
 
     # Load Patch
-    pert_sz_ratio = (0.7, 0.7)
+    pert_sz_ratio = (0.5, 0.5)
     patch = cv2.imread('patch_sm.png')
     patch = kornia.image_to_tensor(patch).to(torch.float) # (3, H, W)
     patch = patch.clone().detach().requires_grad_(False) # (3, H, W)

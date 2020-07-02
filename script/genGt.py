@@ -16,11 +16,12 @@ from utils.tracker_config import TrackerConfig
 from tracker import Tracker, tracker_init, tracker_track
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
+parser.add_argument('--base_path', default='data/tennis', help='imgs path')
 args = parser.parse_args()
 
-def main(base_path='data/Surface5'):
+def main():
 
-    args.base_path = base_path
+    # args.base_path = base_path
     args.resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
     args.config = "../SiamMask/experiments/siammask_sharp/config_davis.json"
     print(join(args.base_path, 'groundtruth_rect.txt'))

@@ -163,9 +163,9 @@ class PatchTrainer(object):
 
         # Setup attacker cfg
         mu, sigma = 127, 5
-        patch_sz = (260, 400)
+        patch_sz = (200, 400)
         label_thr_iou = 0.2
-        pert_sz_ratio = (0.7, 0.7)
+        pert_sz_ratio = (0.6, 0.6)
         shift_pos, shift_wh = (-0.2, 0.2), (-0.2, 1.0)
         loss_delta_margin = 0.7
         loss_tv_margin = 1.5
@@ -181,7 +181,7 @@ class PatchTrainer(object):
         BATCHSIZE = 25
         n_epochs = 1000
 
-        video = 'data/Surface5'
+        video = 'data/Phone1'
         train_nFrames = 100
 
         # Transformation Aug
