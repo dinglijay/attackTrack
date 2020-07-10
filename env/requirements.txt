@@ -1,3 +1,4 @@
+# for siamMask
 Cython
 colorama
 numpy
@@ -11,5 +12,9 @@ pandas
 tqdm
 tensorboardX
 opencv_python
+korniatensorboard
+# for pysot
+yacs
+pyyaml
+# for attack
 kornia
-tensorboard
