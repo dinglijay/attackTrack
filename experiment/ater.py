@@ -4,9 +4,11 @@ import torch
 import cv2
 import kornia
 import numpy as np
-from os.path import join, isdir, isfile
+import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
 from torch.utils.data import DataLoader
+from os.path import isfile
 
 from utils.config_helper import load_config
 from utils.load_helper import load_pretrain
@@ -17,6 +19,7 @@ from tracker import Tracker, bbox2center_sz
 from masks import get_bbox_mask_tv, scale_bbox, warp_patch
 from attack_dataset import AttackDataset
 from tmp import rand_shift
+from style import get_style_model_and_losses
 
 from matplotlib import pyplot as plt
 
@@ -30,7 +33,7 @@ class PatchTrainer(object):
         super(PatchTrainer, self).__init__()
 
         # Setup device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.backends.cudnn.benchmark = True
 
         # Setup tracker cfg
@@ -44,8 +47,11 @@ class PatchTrainer(object):
         if args.resume:
             assert isfile(args.resume), 'Please download {} first.'.format(args.resume)
             siammask = load_pretrain(siammask, args.resume)
-        siammask.eval().to(self.device)
+        siammask.eval().to(device)
         self.model = siammask
+
+        # Setup style feature layers
+        self.cnn, self.style_losses, self.content_losses = get_style_model_and_losses(device)
 
     def get_tracking_result(self, template_img, template_bbox, search_img, track_bbox, out_layer='score'):
         device = self.device
@@ -80,6 +86,23 @@ class PatchTrainer(object):
                 res_y = int(res_cy - res_h / 2)
                 res_bbox.append(((res_x, res_y, res_w, res_h)))
             return pscore, delta, pscore_size, np.array(res_bbox)
+
+    def forward_cnn(self, patch):
+        self.cnn(patch.unsqueeze(0)/255.0)
+        style_score = 0
+        content_score = 0
+
+        for sl in self.style_losses:
+            style_score += sl.loss
+        for cl in self.content_losses:
+            content_score += cl.loss
+
+        style_weight=100
+        content_weight=0.01
+        style_score *= style_weight
+        content_score *= content_weight
+
+        return style_score, content_score
 
     def get_label(self, track_bbox, thr_iou=0.2, need_iou=False):
         '''Input track_bbox: np.array of size (B, 4)
@@ -143,8 +166,6 @@ class PatchTrainer(object):
         '''
         delta = self.model.rpn_pred_loc.view((-1, 4, 3125)) # (B, 4, 3125)
 
-        # target = torch.tensor([1.0, 1.0, -1.0, -1.0], device=self.device)
-        # diff = delta.permute(0,2,1)[...] - target # (B, 3125, 4)
         target = torch.tensor([1.0, 1.0], device=self.device)
         diff = delta.permute(0,2,1)[..., 2:] - target # (B, 3125, 2)
         diff = torch.max(diff.abs(), torch.tensor(margin, device=self.device))
@@ -165,17 +186,15 @@ class PatchTrainer(object):
         mu, sigma = 127, 5
         patch_sz = (200, 400)
         label_thr_iou = 0.2
-        pert_sz_ratio = (0.6, 0.6)
-        shift_pos, shift_wh = (-0.2, 0.2), (-0.2, 1.0)
+        pert_sz_ratio = (0.5, 0.5)
+        shift_pos, shift_wh = (-0.2, 0.2), (-0.1, 1.2)
         loss_delta_margin = 0.7
         loss_tv_margin = 1.5
 
-        para_trans_color = {'brightness': 0.1, 'contrast': 0.1, 'saturation': 0.1, 'hue': 0.1}
-        para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+        para_trans_color = {'brightness': 0.1, 'contrast': 0.1, 'saturation': 0.01, 'hue': 0.05}
+        para_trans_affine = {'degrees': 2, 'translate': [0.005, 0.005], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+        para_trans_affine_t = {'degrees': 2, 'translate': [0.005, 0.005], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
         para_gauss = {'kernel_size': (9, 9), 'sigma': (5,5)}
-
-        para_trans_affine_t = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
-
 
         adam_lr = 10
         BATCHSIZE = 25
@@ -229,14 +248,16 @@ class PatchTrainer(object):
 
                 # self.show_patch_warpped_t(patch_template, patch_search)
 
-                # Forward
+                # Forward tracking net
                 pert_data = (patch_template, template_bbox, patch_search, track_bbox)
                 pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
-                        
                 loss_delta = self.loss(pscore, loss_delta_margin)
+                # Forward style net
+                style_score, content_score = self.forward_cnn(patch)
+
                 tv = 0.05 * total_variation(patch)/torch.numel(patch)
                 loss_tv = torch.max(tv, torch.tensor(loss_tv_margin).to(device))
-                loss = loss_delta + loss_tv
+                loss = loss_delta + loss_tv + style_score + content_score
                 
                 # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
                 # self.show_attack_plt(pscore, bbox, bbox_src, patch)
@@ -247,8 +268,8 @@ class PatchTrainer(object):
                 optimizer.step()
                 patch.data = (patch.data).clamp(0.1, 255)
 
-                print('epoch {:}  Batch  End -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f} '.format(\
-                        epoch, loss_delta.cpu().data.numpy(), tv.cpu().data.numpy(), loss.cpu().data.numpy() ))
+                print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss_style: {:.5f}, loss_content: {:.5f}, loss: {:.5f}'.format(\
+                        epoch, loss_delta.item(), tv.item(), style_score.item(), content_score.item(), loss.item() ))
             cv2.imwrite('patch_sm.png', kornia.tensor_to_image(patch.detach().byte()))
 
         return kornia.tensor_to_image(patch.detach().byte())
@@ -315,12 +336,12 @@ class PatchTrainer(object):
         cv2.imshow('patch_search', kornia.tensor_to_image(patch_search.byte()).reshape(-1, img_w, 3))
         cv2.waitKey(0)
 
-    def generate_patch(self, size=(300, 400)):
+    def load_patch(self, img_name, size=(300, 400)):
         """
         Generate a random patch as a starting point for optimization.
         """
         # adv_patch_cpu = (mu + sigma * torch.randn(3, size[0], size[1])).clamp(0,255)
-        adv_patch_cpu = cv2.resize(cv2.imread('data/patchnew0.jpg'), (size[1], size[0])) # W, H
+        adv_patch_cpu = cv2.resize(cv2.imread(img_name), (size[1], size[0])) # W, H
         adv_patch_cpu = kornia.image_to_tensor(patch).to(torch.float)
 
         return adv_patch_cpu
