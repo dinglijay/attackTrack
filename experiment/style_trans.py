@@ -13,15 +13,23 @@ import copy
 import cv2
 import kornia
 
+class Normalization(nn.Module):
+    def __init__(self, device='cuda'):
+        super(Normalization, self).__init__()
+        mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
+        std = torch.tensor([0.229, 0.224, 0.225]).to(device)
+
+        self.mean = mean.view(-1, 1, 1)
+        self.std = std.view(-1, 1, 1)
+
+    def forward(self, img):
+        return (img - self.mean) / self.std
 
 class ContentLoss(nn.Module):
 
     def __init__(self, target,):
         super(ContentLoss, self).__init__()
-        # we 'detach' the target content from the tree used
-        # to dynamically compute the gradient: this is a stated value,
-        # not a variable. Otherwise the forward method of the criterion
-        # will throw an error.
+        # we 'detach' the target content from the tree
         self.target = target.detach()
 
     def forward(self, input):
@@ -40,36 +48,16 @@ class StyleLoss(nn.Module):
         return input
 
 def gram_matrix(input):
-    a, b, c, d = input.size()  # a=batch size(=1)
-    # b=number of feature maps
-    # (c,d)=dimensions of a f. map (N=c*d)
-
-    features = input.view(a * b, c * d)  # resise F_XL into \hat F_XL
-
-    G = torch.mm(features, features.t())  # compute the gram product
-
-    # we 'normalize' the values of the gram matrix
-    # by dividing by the number of element in each feature maps.
-    return G.div(a * b * c * d)
+    B, C, H, W = input.size() 
+    features = input.view(B, C, H * W) 
+    G = torch.bmm(features, features.transpose(1, 2) ) # (B, C, C)
+    return G.div(C * H * W) # normalize the values of the gram matrix
 
 def image_loader(image_name):
     img = cv2.imread(image_name) / 255.0
     img = cv2.resize(img, (imsize, imsize))
     img = kornia.image_to_tensor(img).unsqueeze(0)
     return img.to(device, torch.float)
-
-class Normalization(nn.Module):
-    def __init__(self, device='cuda'):
-        super(Normalization, self).__init__()
-        mean = torch.tensor([0.485, 0.456, 0.406]).to(device)
-        std = torch.tensor([0.229, 0.224, 0.225]).to(device)
-
-        self.mean = mean.view(-1, 1, 1)
-        self.std = std.view(-1, 1, 1)
-
-    def forward(self, img):
-        return (img - self.mean) / self.std
-
 
 def get_style_model_and_losses(cnn, style_img, content_img,
                                content_layers=['conv_4'],
@@ -130,14 +118,12 @@ def get_style_model_and_losses(cnn, style_img, content_img,
 
     return model, style_losses, content_losses
 
-plt.ion()
 def imshow(tensor, title=None):
     image = kornia.tensor_to_image(tensor)
     plt.imshow(image)
     if title is not None:
         plt.title(title)
     plt.pause(0.001)
-
 
 def run_style_transfer(cnn, content_img, style_img, input_img, num_steps=300,
                        style_weight=1000000, content_weight=1):
@@ -170,15 +156,12 @@ def run_style_transfer(cnn, content_img, style_img, input_img, num_steps=300,
         # loss.backward()
         # optimizer.step(closure)
 
-
         # run[0] += 1
         # if run[0] % 50 == 0:
         #     print("run {}:".format(run))
         #     print('Style Loss : {:4f} Content Loss: {:4f}'.format(
         #         style_score.item(), content_score.item()))
         #     print()
-
-
 
         def closure():
             # correct the values of updated input image
@@ -215,29 +198,23 @@ def run_style_transfer(cnn, content_img, style_img, input_img, num_steps=300,
     input_img.data.clamp_(0, 1)
 
     return input_img
+if __name__ == "__main__":
+        
+    imsize = 512 if torch.cuda.is_available() else 128  # use small size if no gpu
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# # desired size of the output image
-# imsize = 512 if torch.cuda.is_available() else 128  # use small size if no gpu
+    style_img = image_loader("data/styleTrans/style1.jpg")
+    content_img = image_loader("data/styleTrans/content.jpg")
+    input_img = content_img.clone()
 
+    assert style_img.size() == content_img.size(), \
+        "we need to import style and content images of the same size"
 
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cnn = models.vgg19(pretrained=True).features.to(device).eval()
 
-# style_img = image_loader("data/styleTrans/style1.jpg")
-# content_img = image_loader("data/styleTrans/content.jpg")
+    output = run_style_transfer(cnn, content_img, style_img, input_img, num_steps=300)
 
-# input_img = content_img.clone()
-
-# assert style_img.size() == content_img.size(), \
-#     "we need to import style and content images of the same size"
-
-# cnn = models.vgg19(pretrained=True).features.to(device).eval()
-
-# output = run_style_transfer(cnn, content_img, style_img, input_img, num_steps=1200)
-
-# plt.figure()
-# imshow(output, title='Output Image')
-
-# # sphinx_gallery_thumbnail_number = 4
-# plt.ioff()
-# plt.show()
+    plt.figure()
+    imshow(output, title='Output Image')
+    plt.show()
 
