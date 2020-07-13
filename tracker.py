@@ -182,13 +182,15 @@ class Tracker(Custom):
     def template(self, template_img, template_pos, template_sz):
         crop_sz = self.get_crop_sz(template_sz)
         self.template_cropped = self.get_subwindow(template_img, template_pos, crop_sz, out_size=self.p.exemplar_size)
-        self.zf = self.features(self.template_cropped)
+        # self.zf = self.features(self.template_cropped)
+        self.zf_all, self.zf = self.features.forward_all(self.template_cropped)
 
     def track(self, search_img, target_pos, target_sz):
         crop_sz = self.get_crop_sz(target_sz, is_search=True)
         self.search_cropped = self.get_subwindow(search_img, target_pos, crop_sz, out_size=self.p.instance_size)
-        search = self.features(self.search_cropped)
-        rpn_pred_cls, rpn_pred_loc = self.rpn(self.zf, search)
+        # search = self.features(self.search_cropped)
+        self.xf_all, self.xf = self.features.forward_all(self.search_cropped)
+        rpn_pred_cls, rpn_pred_loc = self.rpn(self.zf, self.xf)
         self.rpn_pred_cls, self.rpn_pred_loc = rpn_pred_cls, rpn_pred_loc
         pscore, delta, pscore_size = self.penalty(rpn_pred_cls, rpn_pred_loc, target_sz)
         return pscore, delta, pscore_size
