@@ -6,6 +6,7 @@ docker run -ti \
         --name li-attack \
         --gpus 'all' \
         --shm-size 16g \
+        --ipc host \
         -v /home/li:/workspace \
         -v /mnt/DataServer/li:/DataServer \
         li-attack
