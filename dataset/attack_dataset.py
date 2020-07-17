@@ -1,7 +1,7 @@
 import cv2
 import glob
 import pickle
-from os.path import join
+from os.path import join, exists
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
@@ -37,21 +37,25 @@ class AttackDataset(Dataset):
 
     def __init__(self, root_dir='data/Human2', n_frames=None, step=1, test=False, transform=None):
         self.root_dir = root_dir
-        self.img_names = sorted(glob.glob(join(root_dir, 'imgs', '*.jp*')))
+        img_dir = 'imgs' if exists(join(root_dir, 'imgs')) else 'img'
+        self.img_names = sorted(glob.glob(join(root_dir, img_dir, '*.jp*')))
+        if n_frames:
+            self.img_names = self.img_names[:n_frames]
+
         self.imgs = [np.transpose(cv2.imread(im_name).astype(np.float32), (2, 0, 1)) for im_name in self.img_names]
 
-        with open(join(root_dir, 'groundtruth_rect.txt'), "r") as f:
+        gt_file = 'groundtruth.txt' if exists(join(root_dir, 'groundtruth.txt')) else 'groundtruth_rect.txt'
+        with open(join(root_dir, gt_file), "r") as f:
             gts = f.readlines()
             split_flag = ',' if ',' in gts[0] else '\t'
             self.bbox = list(map(lambda x: list(map(int, x.rstrip().split(split_flag))), gts))
-        
+            if n_frames:
+                self.bbox = self.bbox[:n_frames]
+
         # with open(join(root_dir, 'corners.dat'), 'rb') as f:
         #     data = pickle.load(f)
         #     self.rets = data['ret']
         #     self.corners = data['corners']
-        
-        if n_frames:
-            self.imgs = self.imgs[:n_frames]
 
         # assert len(self.bbox) == len(self.img_names) == self.rets.shape[0] ==self.corners.shape[0]
         assert len(self.bbox) == len(self.img_names)
@@ -84,7 +88,7 @@ if __name__ =='__main__':
     import kornia
 
     dataset = AttackDataset(step=1)
-    dataloader = DataLoader(dataset, batch_size=2)
+    dataloader = DataLoader(dataset, batch_size=2, num_workers=8)
 
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("search", cv2.WND_PROP_FULLSCREEN)
