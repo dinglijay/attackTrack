@@ -1,4 +1,6 @@
 #!/bin/sh
+cd ../pysot
+export PYTHONPATH=$PWD:$PYTHONPATH
 cd ../SiamMask
 export SiamMask=$PWD
 export PYTHONPATH=$PWD:$PYTHONPATH
