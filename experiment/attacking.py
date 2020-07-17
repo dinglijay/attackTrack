@@ -12,7 +12,7 @@ from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, bbox2center_sz
-from attack_dataset import AttackDataset
+from dataset.attack_dataset import AttackDataset
 from masks import warp_patch, scale_bbox, get_bbox_mask_tv
 
 
@@ -27,7 +27,7 @@ def init(model, template_img, template_bbox):
     
     template_img = np.ascontiguousarray(kornia.tensor_to_image(template_img.byte()))
     
-    x, y, w, h = template_bbox.squeeze().cpu().numpy()
+    x, y, w, h = template_bbox.squeeze().to(int).cpu().numpy()
     x2, y2 = x+w, y+h
     cv2.rectangle(template_img, (x, y), (x2, y2), (0, 255, 0), 4)
     cv2.imshow('template', template_img)
@@ -35,12 +35,9 @@ def init(model, template_img, template_bbox):
 
 def track(model, p, search_img, search_bbox):
     pos_x, size_x = bbox2center_sz(search_bbox)
-
-
     pscore, delta, pscore_size = model.track(search_img.to(device),
                                              pos_x.to(device),
                                              size_x.to(device))
-
     scale_x = model.penalty.get_scale_x(size_x)
 
     assert pscore.shape[0]==1
@@ -104,10 +101,12 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(root_dir='data/Phone1', step=1, test=True), batch_size=100)
+    dataset = AttackDataset(root_dir='data/lasot/person/person-20', step=1, test=True)
+    dataloader = DataLoader(dataset, batch_size=100, num_workers=1)
 
     # Load Patch
     pert_sz_ratio = (0.5, 0.5)
+    # patch = cv2.imread('data/styleTrans/tennis_object.jpg')
     patch = cv2.imread('patch_sm.png')
     patch = kornia.image_to_tensor(patch).to(torch.float) # (3, H, W)
     patch = patch.clone().detach().requires_grad_(False) # (3, H, W)
@@ -117,10 +116,13 @@ if __name__ == '__main__':
     save_img = False
 
     # Random Transformation
-    para_trans_color = {'brightness': 0.1, 'contrast': 0.1, 'saturation': 0.1, 'hue': 0.1}
-    para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+    # para_trans_color = {'brightness': 0.2, 'contrast': 0.1, 'saturation': 0.0, 'hue': 0.0}
+    # para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+    # para_trans_affine_t = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+    para_trans_color = {'brightness': 0, 'contrast': 0, 'saturation': 0, 'hue': 0.0}
+    para_trans_affine = {'degrees': 0}
+    para_trans_affine_t = {'degrees': 0}
     para_gauss = {'kernel_size': (9, 9), 'sigma': (5,5)}
-    para_trans_affine_t = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
 
     # Transformation Aug
     trans_color = kornia.augmentation.ColorJitter(**para_trans_color)
@@ -144,6 +146,7 @@ if __name__ == '__main__':
             # Transformation on patch
             patch_c = patch.expand(template_img.shape[0], -1, -1, -1)
             patch_c = trans_color(patch_c / 255.0) * 255.0
+            patch_c = patch_c.clamp(0.01, 255)
             patch_warpped_t = warp_patch(patch_c, template_img, patch_pos_temp)
             patch_warpped_s = warp_patch(patch_c, search_img, patch_pos_search)
             patch_warpped_t = trans_affine_t(patch_warpped_t)

@@ -12,7 +12,7 @@ from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, bbox2center_sz
-from attack_dataset import AttackDataset
+from dataset.attack_dataset import AttackDataset
 
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')

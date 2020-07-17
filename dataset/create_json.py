@@ -23,7 +23,7 @@ def process_one_category(category_name='data/lasot/cup'):
 
         img_names = sorted(glob(os.path.join(category_name, video, 'img', '*.jp*')))
         im = cv2.imread(img_names[0])
-        # img_names = [x.split('/', 1)[1] for x in img_names]
+        # img_names = [x.split('/', 2)[2] for x in img_names]
 
         meta_data[video] = {'category': video.split('-')[0],
                             'init_rect': gt_traj[0],
@@ -33,6 +33,11 @@ def process_one_category(category_name='data/lasot/cup'):
                             'out_of_view': out_of_view,
                             'width': im.shape[1],
                             'height': im.shape[0]}
+        temp = dict()
+        temp[video] = meta_data[video]
+        json.dump(temp, open(os.path.join(category_name, video, 'anno.json'), 'w'))
+
+        
     json.dump(meta_data, open(os.path.join(category_name, 'anno.json'), 'w'))
     print('Create annotation json file for ', category_name, ': ', os.path.join(category_name, 'anno.json'))
     return meta_data

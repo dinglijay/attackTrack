@@ -1,7 +1,7 @@
 import cv2
 import glob
-import pickle
-from os.path import join, exists
+import json
+from os.path import join
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
@@ -35,32 +35,28 @@ def permutations(iterable, max_dist=10):
 
 class AttackDataset(Dataset):
 
-    def __init__(self, root_dir='data/Human2', n_frames=None, step=1, test=False, transform=None):
-        self.root_dir = root_dir
-        img_dir = 'imgs' if exists(join(root_dir, 'imgs')) else 'img'
-        self.img_names = sorted(glob.glob(join(root_dir, img_dir, '*.jp*')))
-        if n_frames:
-            self.img_names = self.img_names[:n_frames]
+    def __init__(self, root_dir='data/lasot/cup/cup-7', n_frames=None, step=1, test=False):
+        with open(join(root_dir, 'anno.json'), 'r') as f:
+            annos = json.load(f)
 
-        self.imgs = [np.transpose(cv2.imread(im_name).astype(np.float32), (2, 0, 1)) for im_name in self.img_names]
+        self.img_names = list()
+        self.bboxs = list()
+        for anno in annos.values():
+            if not n_frames:
+                self.img_names.extend(anno['img_names'])
+                self.bboxs.extend(anno['gt_rect'])
+            else:
+                indices = np.random.choice(len(anno['img_names']), n_frames, replace=False)
+                indices.sort()
+                self.img_names.extend([anno['img_names'][idx] for idx in indices])
+                self.bboxs.extend([anno['gt_rect'][idx] for idx in indices])
+        assert len(self.bboxs) == len(self.img_names)
 
-        gt_file = 'groundtruth.txt' if exists(join(root_dir, 'groundtruth.txt')) else 'groundtruth_rect.txt'
-        with open(join(root_dir, gt_file), "r") as f:
-            gts = f.readlines()
-            split_flag = ',' if ',' in gts[0] else '\t'
-            self.bbox = list(map(lambda x: list(map(int, x.rstrip().split(split_flag))), gts))
-            if n_frames:
-                self.bbox = self.bbox[:n_frames]
+        self.imgs = None
+        if len(self.img_names) < 1000:
+            self.imgs = [np.transpose(cv2.imread(im_name).astype(np.float32), (2, 0, 1)) \
+                         for im_name in self.img_names]
 
-        # with open(join(root_dir, 'corners.dat'), 'rb') as f:
-        #     data = pickle.load(f)
-        #     self.rets = data['ret']
-        #     self.corners = data['corners']
-
-        # assert len(self.bbox) == len(self.img_names) == self.rets.shape[0] ==self.corners.shape[0]
-        assert len(self.bbox) == len(self.img_names)
-        
-        self.transform = transform
         self.step = step
         self.test = test
     
@@ -68,19 +64,22 @@ class AttackDataset(Dataset):
         n_imgs = len(self.img_names)
         list(permutations(n_imgs, 5))
 
-
     def __len__(self):
-        return len(self.imgs) - self.step 
+        return len(self.img_names) - self.step 
 
     def __getitem__(self, idx):
         template_idx = 0 if self.test else np.random.randint(self.__len__())
         search_idx = idx + self.step
         # print(self.img_names[template_idx], self.img_names[search_idx])
         
-        template_img = self.imgs[template_idx]
-        search_img = self.imgs[search_idx]
-        template_bbox = np.array(self.bbox[template_idx])
-        search_bbox = np.array(self.bbox[search_idx])
+        if self.imgs:
+            template_img = self.imgs[template_idx]
+            search_img = self.imgs[search_idx]
+        else:
+            template_img = np.transpose(cv2.imread(self.img_names[template_idx]).astype(np.float32), (2, 0, 1))
+            search_img = np.transpose(cv2.imread(self.img_names[search_idx]).astype(np.float32), (2, 0, 1))
+        template_bbox = np.array(self.bboxs[template_idx])
+        search_bbox = np.array(self.bboxs[search_idx])
        
         return template_img, template_bbox, search_img, search_bbox
 
@@ -88,7 +87,7 @@ if __name__ =='__main__':
     import kornia
 
     dataset = AttackDataset(step=1)
-    dataloader = DataLoader(dataset, batch_size=2, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=30, shuffle=True, num_workers=8)
 
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("search", cv2.WND_PROP_FULLSCREEN)

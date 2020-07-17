@@ -53,9 +53,10 @@ def gram_matrix(input):
     G = torch.bmm(features, features.transpose(1, 2) ) # (B, C, C)
     return G.div(C * H * W) # normalize the values of the gram matrix
 
-def image_loader(image_name):
+def image_loader(image_name, imsize=None):
     img = cv2.imread(image_name) / 255.0
-    img = cv2.resize(img, (imsize, imsize))
+    if imsize:
+        img = cv2.resize(img, (imsize[1], imsize[0]))
     img = kornia.image_to_tensor(img).unsqueeze(0)
     return img.to(device, torch.float)
 
@@ -126,7 +127,7 @@ def imshow(tensor, title=None):
     plt.pause(0.001)
 
 def run_style_transfer(cnn, content_img, style_img, input_img, num_steps=300,
-                       style_weight=1000000, content_weight=1):
+                       style_weight=1e6, content_weight=1e1):
     """Run the style transfer."""
     print('Building the style transfer model..')
     model, style_losses, content_losses = get_style_model_and_losses(cnn, style_img, content_img)
@@ -198,13 +199,14 @@ def run_style_transfer(cnn, content_img, style_img, input_img, num_steps=300,
     input_img.data.clamp_(0, 1)
 
     return input_img
+    
 if __name__ == "__main__":
         
     imsize = 512 if torch.cuda.is_available() else 128  # use small size if no gpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     style_img = image_loader("data/styleTrans/style1.jpg")
-    content_img = image_loader("data/styleTrans/content.jpg")
+    content_img = image_loader("data/styleTrans/tennis_person.png", imsize=style_img.shape[-2:])
     input_img = content_img.clone()
 
     assert style_img.size() == content_img.size(), \
