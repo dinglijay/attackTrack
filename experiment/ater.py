@@ -17,7 +17,7 @@ from utils.bbox_helper import IoU, corner2center, center2corner
 
 from tracker import Tracker, bbox2center_sz
 from masks import get_bbox_mask_tv, scale_bbox, warp_patch
-from attack_dataset import AttackDataset
+from dataset.attack_dataset import AttackDataset
 from tmp import rand_shift
 from style import get_style_model_and_losses
 from style_trans import gram_matrix
@@ -51,8 +51,8 @@ class PatchTrainer(object):
         siammask.eval().to(device)
         self.model = siammask
 
-        # Setup style feature layers
-        self.cnn, self.style_losses, self.content_losses = get_style_model_and_losses(device)
+        # # Setup style feature layers
+        # self.cnn, self.style_losses, self.content_losses = get_style_model_and_losses(device)
 
     def get_tracking_result(self, template_img, template_bbox, search_img, track_bbox, out_layer='score'):
         device = self.device
@@ -160,7 +160,7 @@ class PatchTrainer(object):
         else:
             return np.array(cls_list), np.array(delta_list), np.array(iou_list)
 
-    def loss(self, pscore, margin=0.7):
+    def loss_delta(self, pscore, margin=0.7, topK=15):
         ''' Note that delta is from model.rpn_pred_loc 
         Loss = max(L1(delta, target), margin), among topK bboxs.
         Input: pscore (B, 3125)
@@ -171,7 +171,7 @@ class PatchTrainer(object):
         diff = delta.permute(0,2,1)[..., 2:] - target # (B, 3125, 2)
         diff = torch.max(diff.abs(), torch.tensor(margin, device=self.device))
         diff = diff.mean(dim=2) # (B, 3125)
-        idx = torch.topk(pscore, k=15, dim=1)[1]
+        idx = torch.topk(pscore, k=topK, dim=1)[1]
 
         diffs = list()
         for i in range(diff.shape[0]):
@@ -179,6 +179,21 @@ class PatchTrainer(object):
         loss_delta = torch.stack(diffs).mean()
 
         return loss_delta
+
+    def loss_clss(self, pscore):
+        clss = self.model.rpn_pred_cls.view(-1, 2, 3125)
+        clss = F.softmax(clss, dim=1)[:,1].view(-1, 5, 625)
+
+        # G = torch.bmm(clss.transpose(1, 2), clss)
+
+        # fig, axes = plt.subplots(1,2,num='loss_clss')
+        # ax = axes[0]
+        # ax.imshow(clss.mean(dim=(0,1)).view(25,25).detach().cpu().numpy(), vmin=0, vmax=1)
+        # ax = axes[1]
+        # ax.imshow(G.mean(dim=0).detach().cpu().numpy())
+        # plt.pause(0.001)
+
+        return 10*clss.mean()
        
     def loss_feat(self, model):
         losses = list()
@@ -194,24 +209,25 @@ class PatchTrainer(object):
 
         # Setup attacker cfg
         mu, sigma = 127, 5
-        patch_sz = (150, 300)
+        patch_sz = (200, 150)
         label_thr_iou = 0.2
         pert_sz_ratio = (0.5, 0.5)
-        shift_pos, shift_wh = (-0.4, -0.3), (-0.1, 0.1)
+        shift_pos, shift_wh = (-0.2, 0.2), (-0.2, 0.5)
         loss_delta_margin = 0.7
+        loss_delta_topk = 15
         loss_tv_margin = 1.5
 
-        para_trans_color = {'brightness': 0.1, 'contrast': 0.1, 'saturation': 0, 'hue': 0}
-        para_trans_affine = {'degrees': 2, 'translate': [0.005, 0.005], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
-        para_trans_affine_t = {'degrees': 2, 'translate': [0.005, 0.005], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+        para_trans_color = {'brightness': 0.1, 'contrast': 0.1, 'saturation': 0.1, 'hue': 0.1}
+        para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+        para_trans_affine_t = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
         para_gauss = {'kernel_size': (9, 9), 'sigma': (5,5)}
 
         adam_lr = 10
-        BATCHSIZE = 20
+        BATCHSIZE = 25
         n_epochs = 1000
 
-        video = 'data/Phone1'
-        train_nFrames = 100
+        video = 'data/lasot/cup/cup-7'
+        train_nFrames = 101
 
         # Transformation Aug
         trans_color = kornia.augmentation.ColorJitter(**para_trans_color)
@@ -222,7 +238,7 @@ class PatchTrainer(object):
 
         # Setup Dataset
         dataset = AttackDataset(video, n_frames=train_nFrames)
-        dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=True)
+        dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
 
         # Generate patch and setup optimizer
         patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0.1,255)
@@ -241,7 +257,7 @@ class PatchTrainer(object):
                 # # Tracking and get label
                 # data_track = (template_img, template_bbox, search_img, track_bbox)
                 # pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
-        
+
                 # Calc patch position 
                 patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
                 patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
@@ -249,24 +265,25 @@ class PatchTrainer(object):
                 # Transformation on patch, (N, W, H) --> (B, N, W, H)
                 patch_c = patch.expand(template_img.shape[0], -1, -1, -1)
                 patch_c = trans_color(patch_c / 255.0) * 255.0
+                patch_c = patch_c.clamp(0.1, 255)
                 patch_warpped_t = warp_patch(patch_c, template_img, patch_pos_temp)
                 patch_warpped_s = warp_patch(patch_c, search_img, patch_pos_search)
                 patch_warpped_t = trans_affine_t(patch_warpped_t)
                 patch_warpped_s = trans_affine(patch_warpped_s)
                 patch_template = torch.where(patch_warpped_t==0, template_img, patch_warpped_t)
                 patch_search = torch.where(patch_warpped_s==0, search_img, patch_warpped_s)
-
                 # self.show_patch_warpped_t(patch_template, patch_search)
 
                 # Forward tracking net
                 pert_data = (patch_template, template_bbox, patch_search, track_bbox)
                 pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
-                loss_delta = self.loss(pscore, loss_delta_margin)
-                loss0, loss1, loss2, loss3 = self.loss_feat(self.model)
-                loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
-                loss_feat = loss_feat * 5e7
+                loss_delta = self.loss_delta(pscore, loss_delta_margin, loss_delta_topk)
+                # loss0, loss1, loss2, loss3 = self.loss_feat(self.model)
+                # loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
+                # loss_feat = loss_feat * 5e7
 
-                # print([sl.item() for sl in loss_feat])
+                loss_clss = self.loss_clss(pscore)
+                
 
 
                 # # Forward style net
@@ -276,7 +293,14 @@ class PatchTrainer(object):
                 loss_tv = torch.max(tv, torch.tensor(loss_tv_margin).to(device))
                 # loss = loss_delta + loss_tv# - loss_feat# + style_score + content_score
                 # loss = -loss_feat# + style_score + content_score
-                loss = -loss_feat + loss_tv
+                # loss = -loss_feat + loss_tv
+
+
+                # loss = loss_clss + loss_tv + loss_delta
+                # print('epoch {:} -> loss_delta: {:.5f}, loss_clss: {:.5f}, loss_tv: {:.5f}'.format(epoch, loss_delta, loss_clss.item(), loss_tv.item()) )
+
+                loss = loss_tv + loss_delta
+                print('epoch {:} -> loss_delta: {:.5f}, loss_tv: {:.5f}'.format(epoch, loss_delta.item(), loss_tv.item()) )
                 
                 # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
                 # self.show_attack_plt(pscore, bbox, bbox_src, patch)
@@ -287,8 +311,8 @@ class PatchTrainer(object):
                 optimizer.step()
                 patch.data = (patch.data).clamp(0.1, 255)
 
-                print('epoch {:} -> loss_feat: {:.4f} loss0: {:.4f}, loss1: {:.4f}, loss2: {:.4f}, loss3: {:.4f}'.format(\
-                        epoch, loss_feat.item(), 5e7*loss0.item(), 5e7*1e1*loss1.item(), 5e7*1e3*loss2.item(), 5e7*1e4*loss3.item() ))
+                # print('epoch {:} -> loss_feat: {:.4f} loss0: {:.4f}, loss1: {:.4f}, loss2: {:.4f}, loss3: {:.4f}'.format(\
+                #         epoch, loss_feat.item(), 5e7*loss0.item(), 5e7*1e1*loss1.item(), 5e7*1e3*loss2.item(), 5e7*1e4*loss3.item() ))
                 # print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f}'.format(\
                 #         epoch, loss_delta.item(), tv.item(), loss.item() ))
                 # print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss_style: {:.5f}, loss_content: {:.5f}, loss: {:.5f}'.format(\

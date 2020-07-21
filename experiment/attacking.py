@@ -101,7 +101,7 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataset = AttackDataset(root_dir='data/lasot/person/person-20', step=1, test=True)
+    dataset = AttackDataset(root_dir='data/lasot/person/person-1', step=1, test=True)
     dataloader = DataLoader(dataset, batch_size=100, num_workers=1)
 
     # Load Patch
