@@ -62,3 +62,22 @@ Adversarial  Attack on Visual Object Tracking
     # avoid gradient to NAN when Backward 
     s: torch.Tensor = deltac / (v + 1e-20)
 ```
+
+### Test and Evaluate
+```
+    # Link data 
+    cd pysot/testing_dataset
+    ln -s /DataServer/tracking_dbs/vot2019 VOT2019
+    ln -s /DataServer/tracking_dbs/OTB100 OTB100
+    cd attackTrack/data
+    ln -s /DataServer/tracking_dbs/vot2019 VOT2019
+    ln -s /DataServer/tracking_dbs/OTB100 OTB100
+
+    # test in pysot
+    python -u ../../tools/test.py --snapshot model.pth --dataset OTB100 --config config.yaml
+    python ../../tools/eval.py --tracker_path ./results --dataset OTB100 --num 4 --tracker_prefix 'model'
+
+    # test in attackTracking
+    python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset OTB100 --config ../pysot/experiments/siammask_r50_l3/config.yaml
+    python experiment/eval.py --tracker_path ./results --dataset OTB100 --num 4 --tracker_prefix 'model'
+```
