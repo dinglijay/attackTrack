@@ -13,7 +13,7 @@ from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, bbox2center_sz
 from dataset.attack_dataset import AttackDataset
-from masks import warp_patch, scale_bbox, get_bbox_mask_tv
+from masks import warp_patch, scale_bbox, scale_bbox_keep_ar, get_bbox_mask_tv
 
 
 parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
@@ -101,7 +101,7 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataset = AttackDataset(root_dir='data/lasot/person/person-1', step=1, test=True)
+    dataset = AttackDataset(root_dir='data/lasot/car/car-2', step=1, test=True)
     dataloader = DataLoader(dataset, batch_size=100, num_workers=1)
 
     # Load Patch
@@ -140,8 +140,11 @@ if __name__ == '__main__':
             template_img, template_bbox, search_img, search_bbox, patch = tuple(map(lambda x: x.to(device), data_slice))
 
             # Generate masks
-            patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
-            patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
+            # patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
+            # patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
+            aspect = patch.shape[-2] / patch.shape[-1]
+            patch_pos_temp = scale_bbox_keep_ar(template_bbox, pert_sz_ratio, aspect)
+            patch_pos_search = scale_bbox_keep_ar(search_bbox, pert_sz_ratio, aspect)
 
             # Transformation on patch
             patch_c = patch.expand(template_img.shape[0], -1, -1, -1)
