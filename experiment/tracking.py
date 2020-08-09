@@ -93,7 +93,8 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataloader = DataLoader(AttackDataset(root_dir='data/Human2', step=1), batch_size=100)
+    dataset = AttackDataset(root_dir='data/lasot/car/car-2', step=1, test=True)
+    dataloader = DataLoader(dataset, batch_size=100, num_workers=1)
 
     cv2.namedWindow("SiamMask", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
