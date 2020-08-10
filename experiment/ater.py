@@ -1,5 +1,6 @@
 import glob
-import argparse
+import configparser
+import json
 import torch
 import cv2
 import kornia
@@ -10,54 +11,88 @@ import torchvision.models as models
 from torch.utils.data import DataLoader
 from os.path import isfile
 
-from utils.config_helper import load_config
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
-from utils.bbox_helper import IoU, corner2center, center2corner
+from utils.bbox_helper import IoU, center2corner
+
+from pysot.core.config import cfg
+from pysot.models.model_builder import ModelBuilder
+from siamrpn_tracker import SiamRPNTracker
 
 from tracker import Tracker, bbox2center_sz
-from masks import get_bbox_mask_tv, scale_bbox, warp_patch
+from masks import get_bbox_mask_tv, scale_bbox_keep_ar, warp_patch
 from dataset.attack_dataset import AttackDataset
 from tmp import rand_shift
 from style import get_style_model_and_losses
 from style_trans import gram_matrix
 
+from matplotlib import patches
 from matplotlib import pyplot as plt
-
-parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
-args = parser.parse_args()
 
 
 class PatchTrainer(object):
 
-    def __init__(self, args):
+    def __init__(self, config_f):
         super(PatchTrainer, self).__init__()
 
         # Setup device
         self.device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         torch.backends.cudnn.benchmark = True
 
-        # Setup tracker cfg
-        cfg = load_config(args)
-        p = TrackerConfig()
-        p.renew()
-        self.p = p
-
         # Setup tracker
-        siammask = Tracker(p=p, anchors=cfg['anchors'])
-        if args.resume:
-            assert isfile(args.resume), 'Please download {} first.'.format(args.resume)
-            siammask = load_pretrain(siammask, args.resume)
-        siammask.eval().to(device)
-        self.model = siammask
-
+        self.config = config = configparser.ConfigParser()
+        config.read(config_f)
+        self.setup_tracker(config)
+        
         # # Setup style feature layers
         # self.cnn, self.style_losses, self.content_losses = get_style_model_and_losses(device)
+
+    def setup_tracker(self, config):
+        if config['train']['victim'] == 'siammask':
+            self.setup_siammask()
+        elif config['train']['victim'] == 'siamrpn':
+            self.setup_siamrpn()
+
+    def setup_siammask(self):
+        # load config
+        resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
+        config_f = "../SiamMask/experiments/siammask_sharp/config_davis.json"
+        config = json.load(open(config_f))
+        self.p = TrackerConfig()
+        self.p.renew()
+        self.smooth_lr = self.p.lr
+
+        # create model
+        siammask = Tracker(p=self.p, anchors=config['anchors'])
+
+        # load model
+        assert isfile(resume), 'Please download {} first.'.format(resume)
+        siammask = load_pretrain(siammask, resume)
+        siammask.eval().to(self.device)
+        self.model = siammask
+
+    def setup_siamrpn(self):
+        # load config
+        snapshot = "../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth"
+        config =  "../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml"
+        cfg.merge_from_file(config)
+        cfg.CUDA = torch.cuda.is_available() and cfg.CUDA
+        self.smooth_lr = cfg.TRACK.LR
+
+        # create and load model
+        model = ModelBuilder()
+        model.load_state_dict(torch.load(snapshot, map_location=lambda storage, loc: storage.cpu()))
+        model.eval().to(self.device)
+
+        # build tracker
+        model = SiamRPNTracker(model)
+        model.get_subwindow.to(self.device)
+        model.penalty.to(self.device)
+        self.model = model
 
     def get_tracking_result(self, template_img, template_bbox, search_img, track_bbox, out_layer='score'):
         device = self.device
         model = self.model
-        p = self.p
 
         pos_z, size_z = bbox2center_sz(template_bbox)
         pos_x, size_x = bbox2center_sz(track_bbox)
@@ -76,7 +111,7 @@ class PatchTrainer(object):
             for i in range(pscore.shape[0]):
                 best_pscore_id = pscore[i,...].argmax()
                 pred_in_crop = delta[i, :, best_pscore_id] # / scale_x
-                lr = pscore_size[i, best_pscore_id] * p.lr  # lr for OTB
+                lr = pscore_size[i, best_pscore_id] * self.smooth_lr  # lr for OTB
                 target_sz_in_crop = size_x[i] * scale_x[i]
 
                 res_cx = int(pred_in_crop[0] + 127)
@@ -165,9 +200,10 @@ class PatchTrainer(object):
         Loss = max(L1(delta, target), margin), among topK bboxs.
         Input: pscore (B, 3125)
         '''
+        loss_target = self.config.getfloat('loss', 'loss_target')
         delta = self.model.rpn_pred_loc.view((-1, 4, 3125)) # (B, 4, 3125)
 
-        target = torch.tensor([1.0, 1.0], device=self.device)
+        target = torch.tensor([loss_target, loss_target], device=self.device)
         diff = delta.permute(0,2,1)[..., 2:] - target # (B, 3125, 2)
         diff = torch.max(diff.abs(), torch.tensor(margin, device=self.device))
         diff = diff.mean(dim=2) # (B, 3125)
@@ -206,43 +242,43 @@ class PatchTrainer(object):
 
     def attack(self):
         device = self.device
+        config = self.config
 
         # Setup attacker cfg
-        mu, sigma = 127, 5
-        patch_sz = (200, 150)
-        label_thr_iou = 0.2
-        pert_sz_ratio = (0.5, 0.5)
-        shift_pos, shift_wh = (-0.2, 0.2), (-0.2, 0.5)
-        loss_delta_margin = 0.7
-        loss_delta_topk = 15
-        loss_tv_margin = 1.5
+        mu = config.getfloat('patch','mu')
+        sigma = config.getfloat('patch','sigma')
+        patch_sz = eval(config['patch']['patch_sz'])
+        pert_sz_ratio = eval(config['patch']['pert_sz_ratio'])
+        shift_pos = eval(config['patch']['shift_pos'])
+        shift_wh = eval(config['patch']['shift_wh'])
 
-        para_trans_color = {'brightness': 0.1, 'contrast': 0.1, 'saturation': 0.1, 'hue': 0.1}
-        para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
-        para_trans_affine_t = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
-        para_gauss = {'kernel_size': (9, 9), 'sigma': (5,5)}
+        loss_tv_margin = config.getfloat('loss','loss_tv_margin')
+        loss_delta_topk = config.getint('loss','loss_delta_topk')
+        loss_delta_margin = config.getfloat('loss','loss_delta_margin')
 
-        adam_lr = 10
-        BATCHSIZE = 25
-        n_epochs = 1000
+        para_trans_color = eval(config['transformParam']['color'])
+        para_trans_affine = eval(config['transformParam']['affine'])
+        para_trans_affine_t = eval(config['transformParam']['affine_t'])
 
-        video = 'data/lasot/cup/cup-7'
-        train_nFrames = 101
+        video = config['train']['video']
+        train_nFrames = config.getint('train', 'train_nFrames')
+        adam_lr = config.getfloat('train', 'adam_lr')
+        BATCHSIZE = config.getint('train', 'BATCHSIZE')
+        n_epochs = config.getint('train', 'n_epochs')
 
         # Transformation Aug
         trans_color = kornia.augmentation.ColorJitter(**para_trans_color)
         trans_affine = kornia.augmentation.RandomAffine(**para_trans_affine)
         trans_affine_t = kornia.augmentation.RandomAffine(**para_trans_affine_t)
-        avg_filter = kornia.filters.GaussianBlur2d(**para_gauss)
         total_variation = kornia.losses.TotalVariation()
 
         # Setup Dataset
         dataset = AttackDataset(video, n_frames=train_nFrames)
-        dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
+        dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=False, num_workers=8)
 
         # Generate patch and setup optimizer
         patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0.1,255)
-        # patch = kornia.image_to_tensor(cv2.imread('patch_sm.png')).to(torch.float).clamp(0.1, 255)
+        # patch = kornia.image_to_tensor(cv2.resize(cv2.imread('patch_sm.png'), (patch_sz[1], patch_sz[0]))).to(torch.float).clamp(0.1, 255)
         patch = patch.clone().detach().to(self.device).requires_grad_(True) # (3, H, W)
         optimizer = torch.optim.Adam([patch], lr=adam_lr)
 
@@ -259,19 +295,23 @@ class PatchTrainer(object):
                 # pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
 
                 # Calc patch position 
-                patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
-                patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
+                patch_pos_temp = scale_bbox_keep_ar(template_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
+                patch_pos_search = scale_bbox_keep_ar(search_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
 
                 # Transformation on patch, (N, W, H) --> (B, N, W, H)
                 patch_c = patch.expand(template_img.shape[0], -1, -1, -1)
                 patch_c = trans_color(patch_c / 255.0) * 255.0
-                patch_c = patch_c.clamp(0.1, 255)
+                patch_c = patch_c.clamp(0.1, 255) # Just a trick for masking operand
                 patch_warpped_t = warp_patch(patch_c, template_img, patch_pos_temp)
                 patch_warpped_s = warp_patch(patch_c, search_img, patch_pos_search)
                 patch_warpped_t = trans_affine_t(patch_warpped_t)
                 patch_warpped_s = trans_affine(patch_warpped_s)
                 patch_template = torch.where(patch_warpped_t==0, template_img, patch_warpped_t)
                 patch_search = torch.where(patch_warpped_s==0, search_img, patch_warpped_s)
+                # mask = (patch_warpped_t.sum(dim=1)==0).unsqueeze(dim=1).expand(-1,3,-1,-1)
+                # patch_template = torch.where(mask, template_img, patch_warpped_t)
+                # mask = (patch_warpped_s.sum(dim=1)==0).unsqueeze(dim=1).expand(-1,3,-1,-1)
+                # patch_search = torch.where(mask, search_img, patch_warpped_s)
                 # self.show_patch_warpped_t(patch_template, patch_search)
 
                 # Forward tracking net
@@ -317,7 +357,7 @@ class PatchTrainer(object):
                 #         epoch, loss_delta.item(), tv.item(), loss.item() ))
                 # print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss_style: {:.5f}, loss_content: {:.5f}, loss: {:.5f}'.format(\
                 #         epoch, loss_delta.item(), tv.item(), style_score.item(), content_score.item(), loss.item() ))
-            cv2.imwrite('patch_sm.png', kornia.tensor_to_image(patch.detach().byte()))
+            cv2.imwrite('patch_la.png', kornia.tensor_to_image(patch.detach().byte()))
 
         return kornia.tensor_to_image(patch.detach().byte())
 
@@ -394,11 +434,7 @@ class PatchTrainer(object):
         return adv_patch_cpu
 
 if __name__ == '__main__':
-    import matplotlib.patches as patches
-
-    args.resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
-    args.config = "../SiamMask/experiments/siammask_sharp/config_davis.json"
-
-    trainer = PatchTrainer(args)
+    
+    trainer = PatchTrainer(config_f='config/config.ini')
     patch = trainer.attack()
     # cv2.imwrite('patch_sm.png', patch)
