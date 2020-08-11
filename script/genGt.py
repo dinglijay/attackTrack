@@ -1,47 +1,37 @@
-# '''
 # generate gt file based on siammask tracking result
-# '''
 
 import glob
-import argparse
+import json
 import torch
 import cv2
 import numpy as np
-from os.path import join, isdir, isfile
+from os.path import join, isfile
 
-from utils.config_helper import load_config
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 
 from tracker import Tracker, tracker_init, tracker_track
 
-parser = argparse.ArgumentParser(description='PyTorch Tracking Demo')
-parser.add_argument('--base_path', default='data/tennis', help='imgs path')
-args = parser.parse_args()
-
-def main():
-
-    # args.base_path = base_path
-    args.resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
-    args.config = "../SiamMask/experiments/siammask_sharp/config_davis.json"
-    print(join(args.base_path, 'groundtruth_rect.txt'))
+def main(video_path):
+    # setup config
+    resume = "../SiamMask/experiments/siammask_sharp/SiamMask_DAVIS.pth"
+    config_f = "../SiamMask/experiments/siammask_sharp/config_davis.json"
+    config = json.load(open(config_f))
+    p = TrackerConfig()
+    p.renew()
 
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     torch.backends.cudnn.benchmark = True
 
     # Setup Model
-    cfg = load_config(args)
-    p = TrackerConfig()
-    p.renew()
-    siammask = Tracker(p=p, anchors=cfg['anchors'])
-    if args.resume:
-        assert isfile(args.resume), 'Please download {} first.'.format(args.resume)
-        siammask = load_pretrain(siammask, args.resume)
+    siammask = Tracker(p=p, anchors=config['anchors'])
+    assert isfile(resume), 'Please download {} first.'.format(resume)
+    siammask = load_pretrain(siammask, resume)
     siammask.eval().to(device)
 
     # Parse Image file
-    img_files = sorted(glob.glob(join(join(args.base_path, 'imgs'), '*.jp*')))
+    img_files = sorted(glob.glob(join(join(video_path, 'img'), '*.jp*')))
     ims = [cv2.imread(imf) for imf in img_files]
 
     # Select ROI
@@ -53,8 +43,21 @@ def main():
     except:
         exit()
 
-    file1 = open(join(args.base_path, 'groundtruth_rect.txt'), 'w') 
+    file1 = open(join(video_path, 'groundtruth.txt'), 'w') 
     file1.write('{0:d},{1:d},{2:d},{3:d}\n'.format(x, y, w, h))
+    print('Gt file to: ', join(video_path, 'groundtruth.txt'))
+
+    file2 = open(join(video_path, 'full_occlusion.txt'), 'w') 
+    content = '0,' * (len(img_files)-1) + '0'
+    file2.write(content)
+    file2.close()
+    print('Gt file to: ', join(video_path, 'full_occlusion.txt'))
+
+    file3 = open(join(video_path, 'out_of_view.txt'), 'w') 
+    content = '0,' * (len(img_files)-1) + '0'
+    file3.write(content)
+    file3.close()
+    print('Gt file to: ', join(video_path, 'out_of_view.txt'))
 
     toc = 0
     for f, im in enumerate(ims):
@@ -84,4 +87,5 @@ def main():
     print('SiamMask Time: {:02.1f}s Speed: {:3.1f}fps (with visulization!)'.format(toc, fps))
 
 if __name__ == "__main__":
-    main()
+    import fire
+    fire.Fire(main)

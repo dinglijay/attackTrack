@@ -4,10 +4,7 @@ from pathlib import Path
 def main(video_file, resize=None, rotate=False):
 
     dir_path = Path(video_file)
-    # import pdb; pdb.set_trace()
-
-
-    Path(dir_path.parents[0]).joinpath('imgs').mkdir(parents=True, exist_ok=True)
+    Path(dir_path.parents[0]).joinpath('img').mkdir(parents=True, exist_ok=True)
 
     vc = cv2.VideoCapture(video_file)
     c = 1
@@ -19,17 +16,17 @@ def main(video_file, resize=None, rotate=False):
         rval, frame = vc.read()
         if not rval:
             break
+        img_h, img_w = frame.shape[:2]
         if resize:
-            img_h, img_w = frame.shape[:2]
             img_h = int(img_h * resize)
             img_w = int(img_w * resize)
-
-            print(img_h, img_w)
             frame = cv2.resize(frame, (img_w, img_h))
         if rotate:
-            frame = frame.transpose(1,0,2)
-        out = cv2.imwrite(str(dir_path.parents[0])+'/imgs/' + '{0:04d}'.format(c) + '.jpg', frame)
-        print(out, c, str(dir_path.parents[0])+'/imgs/' + '{0:04d}'.format(c) + '.jpg')
+            frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_CLOCKWISE) 
+            img_h, img_w = frame.shape[:2]
+        f_path = str(dir_path.parents[0])+'/img/' + '{0:04d}'.format(c) + '.jpg'
+        out = cv2.imwrite(f_path, frame)
+        print(out, c, f_path, ' Size:', img_h, '*', img_w)
         c = c + 1
 
     vc.release()
