@@ -88,8 +88,8 @@ def scale_bbox_keep_ar(bbox, scale_wh, aspect):
         Y = c_y - H//2
         return tuple(map(int, (X, Y, W, H)))
 
-def scale_bbox(bbox, scale_wh):
-    # todo: unify operation on tensor and int list
+def scale_bbox(bbox, scale_wh, aspect):
+    # pseudo argument --> aspect
 
     if type(bbox) == np.ndarray or type(bbox) == torch.Tensor:
         bbox = bbox.clone().detach()

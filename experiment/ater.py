@@ -9,18 +9,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from torch.utils.data import DataLoader
-from os.path import isfile
+from os.path import isfile, join
 
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
 from utils.bbox_helper import IoU, center2corner
 
 from pysot.core.config import cfg
-from pysot.models.model_builder import ModelBuilder
-from siamrpn_tracker import SiamRPNTracker
+from siamrpn_tracker import SiamRPNModel, SiamRPNTracker
 
 from tracker import Tracker, bbox2center_sz
-from masks import get_bbox_mask_tv, scale_bbox_keep_ar, warp_patch
+from masks import get_bbox_mask_tv, scale_bbox, scale_bbox_keep_ar, warp_patch
 from dataset.attack_dataset import AttackDataset
 from tmp import rand_shift
 from style import get_style_model_and_losses
@@ -40,9 +39,9 @@ class PatchTrainer(object):
         torch.backends.cudnn.benchmark = True
 
         # Setup tracker
-        self.config = config = configparser.ConfigParser()
-        config.read(config_f)
-        self.setup_tracker(config)
+        self.config = configparser.ConfigParser()
+        self.config.read(config_f)
+        self.setup_tracker(self.config)
         
         # # Setup style feature layers
         # self.cnn, self.style_losses, self.content_losses = get_style_model_and_losses(device)
@@ -73,14 +72,15 @@ class PatchTrainer(object):
 
     def setup_siamrpn(self):
         # load config
-        snapshot = "../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth"
-        config =  "../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml"
-        cfg.merge_from_file(config)
+        base_path = "../pysot/experiments"
+        snapshot = join(base_path, self.config.get('train', 'victim_nn'), 'model.pth')
+        nnConfig = join(base_path, self.config.get('train', 'victim_nn'), 'config.yaml')
+        cfg.merge_from_file(nnConfig)
         cfg.CUDA = torch.cuda.is_available() and cfg.CUDA
         self.smooth_lr = cfg.TRACK.LR
 
         # create and load model
-        model = ModelBuilder()
+        model = SiamRPNModel()
         model.load_state_dict(torch.load(snapshot, map_location=lambda storage, loc: storage.cpu()))
         model.eval().to(self.device)
 
@@ -238,7 +238,15 @@ class PatchTrainer(object):
             xgramf = gram_matrix(xf)
             loss = F.mse_loss(zgramf, xgramf)
             losses.append(loss)
-        return losses
+        if self.config['train']['victim'] == 'siammask':
+            loss0, loss1, loss2, loss3 = losses
+            loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
+            loss_feat = loss_feat * 5e7
+        elif self.config['train']['victim'] == 'siamrpn':
+            loss1, loss2, loss3 = losses
+            loss_feat = loss1 + loss2 + loss3
+            loss_feat = loss_feat * 1e3
+        return loss_feat
 
     def attack(self):
         device = self.device
@@ -251,6 +259,7 @@ class PatchTrainer(object):
         pert_sz_ratio = eval(config['patch']['pert_sz_ratio'])
         shift_pos = eval(config['patch']['shift_pos'])
         shift_wh = eval(config['patch']['shift_wh'])
+        get_bbox = scale_bbox_keep_ar if config.getboolean('patch', 'scale_bbox_keep_ar') else scale_bbox
 
         loss_tv_margin = config.getfloat('loss','loss_tv_margin')
         loss_delta_topk = config.getint('loss','loss_delta_topk')
@@ -277,8 +286,11 @@ class PatchTrainer(object):
         dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=False, num_workers=8)
 
         # Generate patch and setup optimizer
-        patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0.1,255)
-        # patch = kornia.image_to_tensor(cv2.resize(cv2.imread('patch_sm.png'), (patch_sz[1], patch_sz[0]))).to(torch.float).clamp(0.1, 255)
+        if config.getboolean('train', 'patch_snapshot'):
+            patch = cv2.resize(cv2.imread(config.get('train', 'patch_snapshot_f')), (patch_sz[1], patch_sz[0]))
+            patch = kornia.image_to_tensor(patch).to(torch.float).clamp(0.1, 255)
+        else:
+            patch = (mu + sigma * torch.randn(3, patch_sz[0], patch_sz[1])).clamp(0.1,255)
         patch = patch.clone().detach().to(self.device).requires_grad_(True) # (3, H, W)
         optimizer = torch.optim.Adam([patch], lr=adam_lr)
 
@@ -295,8 +307,8 @@ class PatchTrainer(object):
                 # pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
 
                 # Calc patch position 
-                patch_pos_temp = scale_bbox_keep_ar(template_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
-                patch_pos_search = scale_bbox_keep_ar(search_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
+                patch_pos_temp = get_bbox(template_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
+                patch_pos_search = get_bbox(search_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
 
                 # Transformation on patch, (N, W, H) --> (B, N, W, H)
                 patch_c = patch.expand(template_img.shape[0], -1, -1, -1)
@@ -317,30 +329,18 @@ class PatchTrainer(object):
                 # Forward tracking net
                 pert_data = (patch_template, template_bbox, patch_search, track_bbox)
                 pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
+
                 loss_delta = self.loss_delta(pscore, loss_delta_margin, loss_delta_topk)
-                # loss0, loss1, loss2, loss3 = self.loss_feat(self.model)
-                # loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
-                # loss_feat = loss_feat * 5e7
-
+                loss_feat = self.loss_feat(self.model)
                 loss_clss = self.loss_clss(pscore)
-                
-
-
-                # # Forward style net
-                # style_score, content_score = self.forward_cnn(patch)
 
                 tv = 0.05 * total_variation(patch)/torch.numel(patch)
                 loss_tv = torch.max(tv, torch.tensor(loss_tv_margin).to(device))
-                # loss = loss_delta + loss_tv# - loss_feat# + style_score + content_score
-                # loss = -loss_feat# + style_score + content_score
-                # loss = -loss_feat + loss_tv
+                # loss_style, loss_content = self.forward_cnn(patch)
 
-
-                # loss = loss_clss + loss_tv + loss_delta
-                # print('epoch {:} -> loss_delta: {:.5f}, loss_clss: {:.5f}, loss_tv: {:.5f}'.format(epoch, loss_delta, loss_clss.item(), loss_tv.item()) )
-
-                loss = loss_tv + loss_delta
-                print('epoch {:} -> loss_delta: {:.5f}, loss_tv: {:.5f}'.format(epoch, loss_delta.item(), loss_tv.item()) )
+                loss = loss_delta + loss_tv
+                print('epoch {:} -> loss_feat: {:.5f}, loss_delta: {:.5f}, loss_tv: {:.5f}'.format \
+                    (epoch, loss_feat.item(), loss_delta.item(), loss_tv.item()) )
                 
                 # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
                 # self.show_attack_plt(pscore, bbox, bbox_src, patch)
@@ -351,13 +351,8 @@ class PatchTrainer(object):
                 optimizer.step()
                 patch.data = (patch.data).clamp(0.1, 255)
 
-                # print('epoch {:} -> loss_feat: {:.4f} loss0: {:.4f}, loss1: {:.4f}, loss2: {:.4f}, loss3: {:.4f}'.format(\
-                #         epoch, loss_feat.item(), 5e7*loss0.item(), 5e7*1e1*loss1.item(), 5e7*1e3*loss2.item(), 5e7*1e4*loss3.item() ))
-                # print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss: {:.5f}'.format(\
-                #         epoch, loss_delta.item(), tv.item(), loss.item() ))
-                # print('epoch {:} -> loss_delta: {:.5f}, tv: {:.5f}, loss_style: {:.5f}, loss_content: {:.5f}, loss: {:.5f}'.format(\
-                #         epoch, loss_delta.item(), tv.item(), style_score.item(), content_score.item(), loss.item() ))
-            cv2.imwrite('patch_la.png', kornia.tensor_to_image(patch.detach().byte()))
+            patch_save_p = config.get('train', 'patch_save_f')
+            cv2.imwrite(patch_save_p, kornia.tensor_to_image(patch.detach().byte()))
 
         return kornia.tensor_to_image(patch.detach().byte())
 

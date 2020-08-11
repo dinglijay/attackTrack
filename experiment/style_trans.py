@@ -49,7 +49,7 @@ class StyleLoss(nn.Module):
 
 def gram_matrix(input):
     B, C, H, W = input.size() 
-    features = input.view(B, C, H * W) 
+    features = input.reshape(B, C, H * W) 
     G = torch.bmm(features, features.transpose(1, 2) ) # (B, C, C)
     return G.div(C * H * W) # normalize the values of the gram matrix
 

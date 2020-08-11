@@ -101,13 +101,12 @@ if __name__ == '__main__':
     model = siammask
 
     # Setup Dataset
-    dataset = AttackDataset(root_dir='data/lasot/car/car-2', step=1, test=True)
+    dataset = AttackDataset(root_dir='data/own/Human/Human4', step=1, test=True)
     dataloader = DataLoader(dataset, batch_size=100, num_workers=1)
 
     # Load Patch
-    pert_sz_ratio = (0.5, 0.5)
-    # patch = cv2.imread('data/styleTrans/tennis_object.jpg')
-    patch = cv2.imread('patch_sm.png')
+    pert_sz_ratio = (0.7, 0.35)
+    patch = cv2.imread('patch_la_h3.png')
     patch = kornia.image_to_tensor(patch).to(torch.float) # (3, H, W)
     patch = patch.clone().detach().requires_grad_(False) # (3, H, W)
 
@@ -130,6 +129,7 @@ if __name__ == '__main__':
     trans_affine_t = kornia.augmentation.RandomAffine(**para_trans_affine_t)
     avg_filter = kornia.filters.GaussianBlur2d(**para_gauss)
 
+    get_bbox = scale_bbox #scale_bbox_keep_ar 
 
     bbox = None
     for data in dataloader:
@@ -143,8 +143,8 @@ if __name__ == '__main__':
             # patch_pos_temp = scale_bbox(template_bbox, pert_sz_ratio)
             # patch_pos_search = scale_bbox(search_bbox, pert_sz_ratio)
             aspect = patch.shape[-2] / patch.shape[-1]
-            patch_pos_temp = scale_bbox_keep_ar(template_bbox, pert_sz_ratio, aspect)
-            patch_pos_search = scale_bbox_keep_ar(search_bbox, pert_sz_ratio, aspect)
+            patch_pos_temp = get_bbox(template_bbox, pert_sz_ratio, aspect)
+            patch_pos_search = get_bbox(search_bbox, pert_sz_ratio, aspect)
 
             # Transformation on patch
             patch_c = patch.expand(template_img.shape[0], -1, -1, -1)

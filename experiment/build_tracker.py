@@ -13,13 +13,10 @@ import numpy as np
 from glob import glob
 
 from pysot.core.config import cfg
-from pysot.models.model_builder import ModelBuilder
-from pysot.tracker.tracker_builder import build_tracker
 
 import kornia
-from siamrpn_tracker import SiamRPNTracker
+from siamrpn_tracker import SiamRPNTracker, SiamRPNModel
 from tracker import bbox2center_sz
-
 
 torch.set_num_threads(1)
 
@@ -91,7 +88,7 @@ if __name__ == '__main__':
     device = torch.device('cuda' if cfg.CUDA else 'cpu')
 
     # create model
-    model = ModelBuilder()
+    model = SiamRPNModel()
 
     # load model
     model.load_state_dict(torch.load(args.snapshot,
