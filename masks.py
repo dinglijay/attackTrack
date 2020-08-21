@@ -55,19 +55,22 @@ def get_bbox_mask_tv(shape=(127,127), bbox=(50,50,20,20)):
         masks.append(mask)
     return torch.stack(masks, dim=0)
 
-def scale_bbox_keep_ar(bbox, scale_wh, aspect):
+def scale_bbox_keep_ar(bbox, scale_wh, aspect, delta_xy=(0.0, 0.0)):
     if type(bbox) == np.ndarray or type(bbox) == torch.Tensor:
         bbox = bbox.clone().detach()
         w = bbox[:, 2]
         h = bbox[:, 3]
         c_x = bbox[:, 0] + w // 2
         c_y = bbox[:, 1] + h // 2
+
+        c_x = c_x + w * delta_xy[0]
+        c_y = c_y + h * delta_xy[1]
     
         scale_w, scale_h = scale_wh
         H = (scale_w * scale_h * w * h * aspect).sqrt()
-        H = torch.min(h, H)
+        H = torch.min(h*(1-abs(2*delta_xy[1])), H)
         W = (scale_w * scale_h * w * h / aspect).sqrt()
-        W = torch.min(w, W)
+        W = torch.min(w*(1-abs(2*delta_xy[0])), W)
 
         bbox[:, 0] = c_x - W//2
         bbox[:, 1] = c_y - H//2
@@ -79,11 +82,14 @@ def scale_bbox_keep_ar(bbox, scale_wh, aspect):
         c_x = x + w//2
         c_y = y + h//2
 
+        c_x = c_x + w * delta_xy[0]
+        c_y = c_y + h * delta_xy[1]
+
         scale_w, scale_h = scale_wh
         H = math.sqrt(scale_w * scale_h * w * h * aspect)
-        H = min(H, h)
+        H = min(H, h*(1-abs(2*delta_xy[1])))
         W = math.sqrt(scale_w * scale_h * w * h / aspect)
-        W = min(W, w)
+        W = min(W, w*(1-abs(2*delta_xy[0])))
         X = c_x - W//2
         Y = c_y - H//2
         return tuple(map(int, (X, Y, W, H)))
@@ -189,10 +195,10 @@ if __name__ == '__main__':
 
     import cv2
 
-    img = cv2.imread('data/own/Human1/imgs/0001.jpg')
-    img2 = cv2.imread('data/own/Human1/imgs/0100.jpg')
+    img = cv2.imread('data/own/Human/Human1/img/0001.jpg')
+    img2 = cv2.imread('data/own/Human/Human1/img/0100.jpg')
     H, W = 200, 400
-    patch1 = cv2.resize(cv2.imread('patch_la.png'), (W,H))
+    patch1 = cv2.resize(cv2.imread('patches/patch_la.png'), (W,H))
     patch2 = cv2.resize(cv2.imread('patches/patch_sm.png'), (W,H))
     bbox = [[200,200,200,400], [300,100,200,200]]
 
@@ -214,8 +220,8 @@ if __name__ == '__main__':
     img_tensor2 = kornia.image_to_tensor(img2).unsqueeze(0).to(torch.float32)
     patch_tensor1 = kornia.image_to_tensor(patch1).to(torch.float32)
     patch_tensor2 = kornia.image_to_tensor(patch2).to(torch.float32)
-    bbox = torch.tensor(bbox)
-    bbox_dest = scale_bbox_keep_ar(bbox, (0.5, 0.5), 1.0)
+    bbox = torch.tensor(bbox).to(torch.float)
+    bbox_dest = scale_bbox_keep_ar(bbox, (0.5, 0.5), 1.0, (0, -0.25))
 
     print(bbox)
     print(bbox_dest)
