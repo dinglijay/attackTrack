@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 from torch.utils.data import DataLoader
-from os.path import isfile, join
+from os.path import isfile, join 
 
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
@@ -24,6 +24,7 @@ from dataset.attack_dataset import AttackDataset
 from tmp import rand_shift
 from style import get_style_model_and_losses
 from style_trans import gram_matrix
+from nps import NPSCalculator
 
 from matplotlib import patches
 from matplotlib import pyplot as plt
@@ -31,7 +32,7 @@ from matplotlib import pyplot as plt
 
 class PatchTrainer(object):
 
-    def __init__(self, config_f):
+    def __init__(self, config_f='config/config.ini'):
         super(PatchTrainer, self).__init__()
 
         # Setup device
@@ -39,9 +40,11 @@ class PatchTrainer(object):
         torch.backends.cudnn.benchmark = True
 
         # Setup tracker
-        self.config = configparser.ConfigParser()
+        self.config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation())
         self.config.read(config_f)
         self.setup_tracker(self.config)
+
+        self.attack()
         
         # # Setup style feature layers
         # self.cnn, self.style_losses, self.content_losses = get_style_model_and_losses(device)
@@ -200,7 +203,7 @@ class PatchTrainer(object):
         Loss = max(L1(delta, target), margin), among topK bboxs.
         Input: pscore (B, 3125)
         '''
-        loss_target = self.config.getfloat('loss', 'loss_target')
+        loss_target =  1 if self.config.get('train', 'target') == 'large' else -1
         delta = self.model.rpn_pred_loc.view((-1, 4, 3125)) # (B, 4, 3125)
 
         target = torch.tensor([loss_target, loss_target], device=self.device)
@@ -241,12 +244,21 @@ class PatchTrainer(object):
         if self.config['train']['victim'] == 'siammask':
             loss0, loss1, loss2, loss3 = losses
             loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
-            loss_feat = loss_feat * 5e7
+            loss_feat = loss_feat * 5e6
         elif self.config['train']['victim'] == 'siamrpn':
-            loss1, loss2, loss3 = losses
+            loss1, loss2, loss3 = losses            
             loss_feat = loss1 + loss2 + loss3
+            # print('loss1: {:.3f}, loss2: {:.3f}, loss3: {:.3f}, loss_feat: {:.3f}'.format \
+            #         (loss1.item()*1e6, loss2.item()*1e6, loss3.item()*1e6, loss_feat.item()*1e6) )
+
             loss_feat = loss_feat * 1e3
-        return loss_feat
+        return -loss_feat
+
+    def loss_overall(self, losses):
+        loss = 0
+        for name in self.config.get('loss', 'loss_component').split('-'):
+            loss += losses[name]
+        return loss
 
     def attack(self):
         device = self.device
@@ -256,9 +268,10 @@ class PatchTrainer(object):
         mu = config.getfloat('patch','mu')
         sigma = config.getfloat('patch','sigma')
         patch_sz = eval(config['patch']['patch_sz'])
-        pert_sz_ratio = eval(config['patch']['pert_sz_ratio'])
         shift_pos = eval(config['patch']['shift_pos'])
         shift_wh = eval(config['patch']['shift_wh'])
+        pert_sz_ratio = eval(config['patch']['pert_sz_ratio'])
+        pert_pos_delta = eval(config['patch']['pert_pos_delta'])
         get_bbox = scale_bbox_keep_ar if config.getboolean('patch', 'scale_bbox_keep_ar') else scale_bbox
 
         loss_tv_margin = config.getfloat('loss','loss_tv_margin')
@@ -274,6 +287,8 @@ class PatchTrainer(object):
         adam_lr = config.getfloat('train', 'adam_lr')
         BATCHSIZE = config.getint('train', 'BATCHSIZE')
         n_epochs = config.getint('train', 'n_epochs')
+        target = config.get('train', 'target')
+        frame_sample = config.get('train', 'frame_sample')
 
         # Transformation Aug
         trans_color = kornia.augmentation.ColorJitter(**para_trans_color)
@@ -281,8 +296,11 @@ class PatchTrainer(object):
         trans_affine_t = kornia.augmentation.RandomAffine(**para_trans_affine_t)
         total_variation = kornia.losses.TotalVariation()
 
+        # Non-printability Score
+        nps = NPSCalculator('experiment/30values.txt', patch_sz).to(device)
+
         # Setup Dataset
-        dataset = AttackDataset(video, n_frames=train_nFrames)
+        dataset = AttackDataset(video, n_frames=train_nFrames, frame_sample=frame_sample)
         dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=False, num_workers=8)
 
         # Generate patch and setup optimizer
@@ -300,15 +318,15 @@ class PatchTrainer(object):
                 template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
                 # Gen tracking bbox  
-                track_bbox = rand_shift(template_img.shape[-2:], search_bbox, shift_pos, shift_wh)
+                track_bbox = rand_shift(template_img.shape[-2:], search_bbox, shift_pos, shift_wh, target)
                 
                 # # Tracking and get label
                 # data_track = (template_img, template_bbox, search_img, track_bbox)
                 # pscore, delta, pscore_size, bbox_src = self.get_tracking_result(*data_track, out_layer='bbox')
 
                 # Calc patch position 
-                patch_pos_temp = get_bbox(template_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
-                patch_pos_search = get_bbox(search_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1])
+                patch_pos_temp = get_bbox(template_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1], pert_pos_delta)
+                patch_pos_search = get_bbox(search_bbox, pert_sz_ratio, patch_sz[0]/patch_sz[1], pert_pos_delta)
 
                 # Transformation on patch, (N, W, H) --> (B, N, W, H)
                 patch_c = patch.expand(template_img.shape[0], -1, -1, -1)
@@ -324,7 +342,7 @@ class PatchTrainer(object):
                 # patch_template = torch.where(mask, template_img, patch_warpped_t)
                 # mask = (patch_warpped_s.sum(dim=1)==0).unsqueeze(dim=1).expand(-1,3,-1,-1)
                 # patch_search = torch.where(mask, search_img, patch_warpped_s)
-                # self.show_patch_warpped_t(patch_template, patch_search)
+                # self.show_patch_warpped_t(patch_template, template_bbox, patch_search, track_bbox)
 
                 # Forward tracking net
                 pert_data = (patch_template, template_bbox, patch_search, track_bbox)
@@ -332,15 +350,16 @@ class PatchTrainer(object):
 
                 loss_delta = self.loss_delta(pscore, loss_delta_margin, loss_delta_topk)
                 loss_feat = self.loss_feat(self.model)
-                loss_clss = self.loss_clss(pscore)
-
+                loss_nps = nps(patch/255.0)
                 tv = 0.05 * total_variation(patch)/torch.numel(patch)
                 loss_tv = torch.max(tv, torch.tensor(loss_tv_margin).to(device))
-                # loss_style, loss_content = self.forward_cnn(patch)
+                # loss_clss = self.loss_clss(pscore)
+                # loss_style, loss_content = self.forward_cnn(patch)feat
 
-                loss = loss_delta + loss_tv
-                print('epoch {:} -> loss_feat: {:.5f}, loss_delta: {:.5f}, loss_tv: {:.5f}'.format \
-                    (epoch, loss_feat.item(), loss_delta.item(), loss_tv.item()) )
+                losses = {'delta':loss_delta, 'feat':loss_feat, 'tv':loss_tv, 'nps': loss_nps}
+                loss = self.loss_overall(losses)
+                print('epoch {:} -> loss_feat: {:.3f}, loss_delta: {:.3f}, loss_tv: {:.3f}, loss_nps: {:.3f}'.format \
+                    (epoch, loss_feat.item(), loss_delta.item(), loss_tv.item(), loss_nps.item()) )
                 
                 # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
                 # self.show_attack_plt(pscore, bbox, bbox_src, patch)
@@ -409,13 +428,23 @@ class PatchTrainer(object):
             ax.add_patch(rect)
         plt.pause(0.01)
 
-    def show_patch_warpped_t(self, patch_template, patch_search):
+    def show_patch_warpped_t(self, patch_template, template_bbox, patch_search, track_bbox):
         cv2.namedWindow("patch_template", cv2.WND_PROP_FULLSCREEN)
         cv2.namedWindow("patch_search", cv2.WND_PROP_FULLSCREEN)
 
-        img_w = patch_template.shape[-1]
-        cv2.imshow('patch_template', kornia.tensor_to_image(patch_template.byte()).reshape(-1, img_w, 3))
-        cv2.imshow('patch_search', kornia.tensor_to_image(patch_search.byte()).reshape(-1, img_w, 3))
+        img_h, img_w = patch_template.shape[-2:]
+        patch_temp_img = kornia.tensor_to_image(patch_template.byte()).reshape(-1, img_w, 3)
+        patch_sear_img = kornia.tensor_to_image(patch_search.byte()).reshape(-1, img_w, 3)
+        patch_temp_img = np.ascontiguousarray(patch_temp_img)
+        patch_sear_img = np.ascontiguousarray(patch_sear_img)
+
+        for i, xywh in enumerate(track_bbox.cpu().numpy()):
+            x, y, w, h = list(map(int, xywh))
+            y += i*img_h
+            cv2.rectangle(patch_sear_img, (x, y), (x+w, y+h), (0, 255, 0), 3)
+
+        cv2.imshow('patch_template', patch_temp_img)
+        cv2.imshow('patch_search', patch_sear_img)
         cv2.waitKey(0)
 
     def load_patch(self, img_name, size=(300, 400)):
@@ -428,8 +457,12 @@ class PatchTrainer(object):
 
         return adv_patch_cpu
 
-if __name__ == '__main__':
-    
-    trainer = PatchTrainer(config_f='config/config.ini')
+def main(config_f='config/config.ini'):
+    trainer = PatchTrainer(config_f=config_f)
     patch = trainer.attack()
-    # cv2.imwrite('patch_sm.png', patch)
+
+if __name__ == '__main__':
+    import fire
+    fire.Fire(main)
+    
+    
