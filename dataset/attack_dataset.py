@@ -40,11 +40,12 @@ class AttackDataset(Dataset):
     To ensure this ugly code works, keep (batchsize % n_frames)==0 and 
     shuffle=False when setup DataLoader
     ''' 
-    def __init__(self, root_dir='data/lasot/person/person-14', n_frames=20, step=1, test=False):
+    def __init__(self, root_dir='data/lasot/person/person-14', frame_sample='random', n_frames=20, test=False):
         # load annotation file
         if 'OTB100' in root_dir: json_fname = 'OTB100.json'
         if 'VOT2019' in root_dir: json_fname = 'VOT2019.json'
         if 'lasot' in root_dir: json_fname = 'anno.json'
+        if 'own' in root_dir: json_fname = 'anno.json'
         with open(join(root_dir, json_fname), 'r') as f:
             annos = json.load(f)
 
@@ -76,8 +77,8 @@ class AttackDataset(Dataset):
                 self.bboxs.extend(anno['gt_rect'])
                 video_lens.append(len(anno['img_names']))
             else:
-                # indices = np.random.choice(len(anno['img_names']), n_frames, replace=False)
-                indices = np.random.choice(n_frames, n_frames, replace=False)
+                video_len = len(anno['img_names']) if frame_sample == 'random' else n_frames
+                indices = np.random.choice(video_len, n_frames, replace=False)
                 indices.sort()
                 anno_selected = [anno['img_names'][idx] for idx in indices]
                 self.img_names.extend(anno_selected)
@@ -98,7 +99,6 @@ class AttackDataset(Dataset):
                             for im_name in self.img_names]
 
         self.n_frames = n_frames
-        self.step = step
         self.test = test
         self.root_dir = root_dir
     
@@ -107,7 +107,7 @@ class AttackDataset(Dataset):
         list(permutations(n_imgs, 5))
 
     def __len__(self):
-        return len(self.img_names) #- self.step 
+        return len(self.img_names)
 
     def __getitem__(self, idx):
         video_idx = np.searchsorted(self.video_seg, idx, 'right')
@@ -141,7 +141,7 @@ class AttackDataset(Dataset):
 if __name__ =='__main__':
     import kornia
 
-    dataset = AttackDataset(step=1, n_frames=10)
+    dataset = AttackDataset(n_frames=10)
     dataloader = DataLoader(dataset, batch_size=2, shuffle=False, num_workers=5)
 
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
