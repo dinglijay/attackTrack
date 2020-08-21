@@ -81,3 +81,28 @@ Adversarial  Attack on Visual Object Tracking
     python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset OTB100 --config ../pysot/experiments/siammask_r50_l3/config.yaml
     python experiment/eval.py --tracker_path ./results --dataset OTB100 --num 4 --tracker_prefix 'model'
 ```
+
+### Script
+```
+python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siammask_r50_l3/config.yaml --video cup-10 --vis
+
+python experiment/test.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml --video cup-10 --vis
+
+python experiment/test.py --snapshot ../pysot/experiments/siamrpn_alex_dwxcorr/model.pth  --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_alex_dwxcorr/config.yaml --video cup-10 --vis
+
+python script/video2imgs.py data/own/Human/Human4/Human4.mp4
+python script/genGt.py data/own/Human/Human4
+python dataset/create_json.py data/own
+
+```
+
+### WebCam Tracking
+```
+python myutils/pysot_track.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --config ../pysot/experiments/siammask_r50_l3/config.yaml
+
+python myutils/pysot_track.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml
+
+python myutils/pysot_track.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --config ../pysot/experiments/siammask_r50_l3/config.yaml
+
+
+```
