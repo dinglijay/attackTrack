@@ -42,9 +42,10 @@ class Patch_applier(object):
         super(Patch_applier, self).__init__()
         para_trans_color = {'brightness': 0.2, 'contrast': 0.1, 'saturation': 0.0, 'hue': 0.0}
         para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
+        self.pert_sz_ratio = (0.5, 0.4)
     
-        patch_name = 'patches/random.jpg'
-        # patch_name = args.patch
+        # patch_name = 'patches/random.jpg'
+        patch_name = args.patch
         self.load_patch(patch_name)
         self.setup_trans(para_trans_color, para_trans_affine)
 
@@ -75,9 +76,8 @@ class Patch_applier(object):
         return patch_warped
 
     def apply_patch_cv2(self, img, gt_bbox):
-        pert_sz_ratio = (0.5, 0.5)
-        # patch_pos = scale_bbox(gt_bbox, pert_sz_ratio)
-        patch_pos = scale_bbox_keep_ar(gt_bbox, pert_sz_ratio, self.patch_aspect)
+        # patch_pos = scale_bbox(gt_bbox, self.pert_sz_ratio)
+        patch_pos = scale_bbox_keep_ar(gt_bbox, self.pert_sz_ratio, self.patch_aspect)
         patch_c = self.trans_color(self.patch)
         patch_warpped = self.warp_patch_cv2(np.array(patch_c), img, patch_pos)
         patch_warpped = self.trans_affine(Image.fromarray(patch_warpped))
@@ -95,9 +95,8 @@ class Patch_applier(object):
         return patch_img
 
     def apply_patch_without_trans(self, img, gt_bbox):
-        pert_sz_ratio = (0.5, 0.5)
-        # patch_pos = scale_bbox(gt_bbox, pert_sz_ratio)
-        patch_pos = scale_bbox_keep_ar(gt_bbox, pert_sz_ratio, self.patch_aspect)
+        # patch_pos = scale_bbox(gt_bbox, self.pert_sz_ratio)
+        patch_pos = scale_bbox_keep_ar(gt_bbox, self.pert_sz_ratio, self.patch_aspect)
         patch_warpped = self.warp_patch_cv2(self.patch_cv2, img, patch_pos)
 
         mask = patch_warpped.sum(axis=2)==0
@@ -106,8 +105,7 @@ class Patch_applier(object):
         return patch_img
 
     def apply_patch(self, img, gt_bbox):
-        pert_sz_ratio = (0.5, 0.5)
-        patch_pos = scale_bbox(gt_bbox, pert_sz_ratio)
+        patch_pos = scale_bbox(gt_bbox, self.pert_sz_ratio)
         patch_pos = torch.tensor(patch_pos).unsqueeze_(dim=0)
 
         patch_c = self.trans_color(self.patch / 255.0) * 255.0
@@ -143,8 +141,14 @@ def main():
 
     # setup applier
     applier = Patch_applier()
+
+    # result saving path
+    video_trained = os.path.split(os.path.split(args.patch)[0])[-1]
+    patch_name = os.path.splitext(os.path.split(args.patch)[-1])[0]
+    model_name = video_trained+'_'+patch_name
+    print('Save results to:', model_name)
                                     
-    model_name = args.snapshot.split('/')[-1].split('.')[0]
+    # model_name = args.snapshot.split('/')[-1].split('.')[0]
     total_lost = 0
     if args.dataset in ['VOT2016', 'VOT2018', 'VOT2019']:
         # restart tracking
