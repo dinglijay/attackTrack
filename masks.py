@@ -94,13 +94,17 @@ def scale_bbox_keep_ar(bbox, scale_wh, aspect, delta_xy=(0.0, 0.0)):
         Y = c_y - H//2
         return tuple(map(int, (X, Y, W, H)))
 
-def scale_bbox(bbox, scale_wh, aspect):
+def scale_bbox(bbox, scale_wh, aspect, delta_xy=(0.0, 0.0)):
     # pseudo argument --> aspect
 
     if type(bbox) == np.ndarray or type(bbox) == torch.Tensor:
         bbox = bbox.clone().detach()
+        w = bbox[:, 2]
+        h = bbox[:, 3]
         c_x = bbox[:, 0] + bbox[:, 2]//2
         c_y = bbox[:, 1] + bbox[:, 3]//2
+        c_x = c_x + w * delta_xy[0]
+        c_y = c_y + h * delta_xy[1]
         scale_w, scale_h = scale_wh
         bbox[:, 2] = bbox[:, 2] * scale_w
         bbox[:, 3] = bbox[:, 3] * scale_h
@@ -111,6 +115,8 @@ def scale_bbox(bbox, scale_wh, aspect):
         x, y, w, h = bbox
         c_x = x + w//2
         c_y = y + h//2
+        c_x = c_x + w * delta_xy[0]
+        c_y = c_y + h * delta_xy[1]
 
         scale_w, scale_h = scale_wh
         w *= scale_w
