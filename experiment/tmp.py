@@ -1,9 +1,11 @@
 import torch
 import numpy as np
+
+from scipy.stats import truncnorm
 from matplotlib import pyplot as plt
 from matplotlib import patches
 
-def rand_shift_bk(img_hw, bbox, shift_pos=(-0.2, 0.2), shift_wh=(-0.9, 0.1), cor=0.3):
+def rand_shift_bk(img_hw, bbox, shift_pos=(-0.2, 0.2), shift_wh=(-0.05, 0.9), cor=0.3):
     ''' Random shift and scale the bbox
     shift_pos and shift_wh is offset range
     cor is the correlation coefficient of delta_w and delta_h
@@ -40,7 +42,7 @@ def rand_shift_bk(img_hw, bbox, shift_pos=(-0.2, 0.2), shift_wh=(-0.9, 0.1), cor
 
     return torch.cat([x, y, w, h], dim=1).to(bbox.dtype)
 
-def rand_shift(img_hw, bbox, shift_pos=(-0.1, 0.1), shift_wh=(-0.8, 0.1), target='small', pos=(0.0, 0.0)):
+def rand_shift(img_hw, bbox, shift_pos=(-0.1, 0.1), shift_wh=(-0.3, 0.1), target='small', pos=(0.0, 0.0)):
     ''' Random shift and scale the bbox
     shift_pos and shift_wh is offset range
     target: small or large
@@ -56,17 +58,20 @@ def rand_shift(img_hw, bbox, shift_pos=(-0.1, 0.1), shift_wh=(-0.8, 0.1), target
     if target == 'large':
         # delta_w = shift_wh[0] + (shift_wh[1] - shift_wh[0]) * torch.rand((B,1)).to(device)
         # delta_h = shift_wh[0] + (shift_wh[1] - shift_wh[0]) * torch.rand((B,1)).to(device)
-        delta_w = torch.randn_like(delta_x).abs()/1.5-0.05
-        delta_h = torch.randn_like(delta_w) / 20 + delta_w
-    elif target == 'small':
-        # delta_h = shift_wh[0] + (shift_wh[1] - shift_wh[0]) * torch.rand((B,1)).to(device)
-        # delta_w = torch.randn_like(delta_h) / 20 + delta_h
-        # delta_w = delta_w.clamp(-0.4, 0.1)
-     
-        delta_h = -(torch.randn_like(delta_x).abs()/4).clamp(0, 0.8)+0.02
-        delta_w = torch.randn_like(delta_h) / 20 + delta_h/2.0
-        delta_w = delta_w.clamp(-0.4, 0.01)
+        # delta_w = torch.randn_like(delta_x).abs()/-0.05
+        # delta_h = torch.randn_like(delta_w) / 20 + delta_w*0.8
 
+        delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
+        delta_h = torch.randn_like(delta_w) / 20 + delta_w
+        
+
+    elif target == 'small':
+        # delta_h = -(torch.randn_like(delta_x).abs()/3).clamp(0, 0.8)+0.01
+        # delta_w = torch.randn_like(delta_h) / 20 + delta_h
+        # delta_w = delta_w.clamp(-0.8, 0.01)
+        delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
+        delta_h = torch.randn_like(delta_w) / 20 + delta_w
+        
         # delta_y += delta_h/2.0
         # delta_x += delta_w/2.0
     else:
@@ -89,8 +94,8 @@ def rand_shift(img_hw, bbox, shift_pos=(-0.1, 0.1), shift_wh=(-0.8, 0.1), target
     return torch.cat([x, y, w, h], dim=1).to(bbox.dtype)
 
 if __name__ == "__main__":
-    search_bbox = torch.tensor([[524,108,289,441]], device='cuda:0')//2
-    img_hw = (360,640)
+    search_bbox = torch.tensor([[568,125,230,360]], device='cuda:0')//4
+    img_hw = np.array([720,1080]) // 4
 
     fig, ax = plt.subplots(1,1,num='bbox')
     for i in range(1000):

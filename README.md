@@ -82,14 +82,19 @@ Adversarial  Attack on Visual Object Tracking
     python experiment/eval.py --tracker_path ./results --dataset OTB100 --num 4 --tracker_prefix 'model'
 ```
 
-### Script
+### Test and Evaluation on LaSOT
 ```
 python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siammask_r50_l3/config.yaml --video cup-10 --vis
 
-python experiment/test.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml --video cup-10 --vis
+python experiment/test.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
+
+python experiment/eval.py --tracker_path ./results --dataset LaSOT-car --num 4 --tracker_prefix 'model'
 
 python experiment/test.py --snapshot ../pysot/experiments/siamrpn_alex_dwxcorr/model.pth  --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_alex_dwxcorr/config.yaml --video cup-10 --vis
+```
 
+### scripts
+``` 
 python script/video2imgs.py data/own/Human/Human4/Human4.mp4
 python script/genGt.py data/own/Human/Human4
 python dataset/create_json.py data/own

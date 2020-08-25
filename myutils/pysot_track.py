@@ -22,6 +22,7 @@ parser = argparse.ArgumentParser(description='tracking demo')
 parser.add_argument('--config', type=str, help='config file')
 parser.add_argument('--snapshot', type=str, help='model name')
 parser.add_argument('--video_name', default='', type=str, help='videos or image files')
+parser.add_argument('--rotate', default=False, type=bool, help='rotate video')
 args = parser.parse_args()
 
 
@@ -37,6 +38,8 @@ def get_frames(video_name):
         while True:
             ret, frame = cap.read()
             if ret:
+                if args.rotate:
+                    frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_CLOCKWISE)
                 yield frame
             else:
                 break

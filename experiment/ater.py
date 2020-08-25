@@ -244,7 +244,7 @@ class PatchTrainer(object):
         if self.config['train']['victim'] == 'siammask':
             loss0, loss1, loss2, loss3 = losses
             loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
-            loss_feat = loss_feat * 5e6
+            loss_feat = loss_feat * 5e5
         elif self.config['train']['victim'] == 'siamrpn':
             loss1, loss2, loss3 = losses            
             loss_feat = loss1 + loss2 + loss3

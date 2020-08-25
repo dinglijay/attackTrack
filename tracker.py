@@ -266,13 +266,13 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
 
     # load images and gt
-    fpath = '/DataServer/car/car-1/img/'
+    fpath = 'data/own/Human1/imgs'
     N_IMS = 2
     img_files = sorted(glob.glob(join(fpath, '*.jp*')))
     ims = [cv2.imread(imf) for imf in img_files[:N_IMS]]
     ims = torch.tensor(ims, device=device, dtype=float).permute(0,3,1,2)
 
-    with open(fpath + '/../groundtruth.txt', "r") as f:
+    with open(fpath + '/../groundtruth_rect.txt', "r") as f:
         gts = f.readlines()
         split_flag = ',' if ',' in gts[0] else '\t'
         gts = list(map(lambda x: list(map(int, x.rstrip().split(split_flag))), gts))

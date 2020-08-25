@@ -32,6 +32,7 @@ parser.add_argument('--config', default='', type=str, help='config file')
 parser.add_argument('--snapshot', default='', type=str, help='snapshot of models to eval')
 parser.add_argument('--video', default='', type=str, help='eval one special video')
 parser.add_argument('--vis', action='store_true', help='whether visualzie result')
+parser.add_argument('--patch', type=str, help='patch file')
 args = parser.parse_args()
 
 torch.set_num_threads(1)
@@ -42,14 +43,14 @@ class Patch_applier(object):
         para_trans_color = {'brightness': 0.2, 'contrast': 0.1, 'saturation': 0.0, 'hue': 0.0}
         para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
     
-        patch_name = 'patch_la.png'
+        patch_name = 'patches/random.jpg'
+        # patch_name = args.patch
         self.load_patch(patch_name)
         self.setup_trans(para_trans_color, para_trans_affine)
 
     def load_patch(self, patch_name, mode='pil'):
         self.patch_cv2 = cv2.imread(patch_name)
         self.patch_aspect = self.patch_cv2.shape[0]/self.patch_cv2.shape[1]
-        print(self.patch_aspect)
         if mode == 'pil':
             self.patch = Image.open(patch_name)
         else:
