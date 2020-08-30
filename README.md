@@ -103,11 +103,7 @@ python dataset/create_json.py data/own
 
 ### WebCam Tracking
 ```
-python myutils/pysot_track.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --config ../pysot/experiments/siammask_r50_l3/config.yaml
-
 python myutils/pysot_track.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml
 
-python myutils/pysot_track.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --config ../pysot/experiments/siammask_r50_l3/config.yaml
-
-
+python myutils/mask_track.py --video_name data/physical/Bottlenew/VID_20200825_181144.mp4
 ```

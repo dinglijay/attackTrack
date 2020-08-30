@@ -7,6 +7,7 @@ import kornia
 import numpy as np
 from os.path import join, isdir, isfile
 from torch.utils.data import DataLoader
+from pathlib import Path
 
 from utils.load_helper import load_pretrain
 from utils.tracker_config import TrackerConfig
@@ -115,7 +116,7 @@ def setup_siamrpn(device, config):
 
     return model, smooth_lr
 
-def main(config_f='config/config.ini'):
+def main(config_f='config/config.ini', save_result=False):
     cv2.namedWindow("template", cv2.WND_PROP_FULLSCREEN)
     cv2.namedWindow(("SiamMask"), cv2.WND_PROP_FULLSCREEN)
 
@@ -143,7 +144,12 @@ def main(config_f='config/config.ini'):
     elif victim == 'siamrpn':
         model, smooth_lr = setup_siamrpn(device, config)
 
-    print(smooth_lr)
+    # mk result dir
+    if save_result:
+        dir_path = Path(video)
+        Path(dir_path).joinpath('result_sm').mkdir(parents=True, exist_ok=True)
+        bbox_file = open(join(Path(dir_path), 'attacked_bbox_sm.txt'), 'w') 
+        print('Gt file to: ', Path(dir_path), 'result and groundtruth.txt')
 
     # Setup Dataset
     dataset = AttackDataset(root_dir=video, test=True)
@@ -169,11 +175,12 @@ def main(config_f='config/config.ini'):
     trans_affine_t = kornia.augmentation.RandomAffine(**para_trans_affine_t)
 
     i = 0
+    first_frame = True
     bbox = None
     for data in dataloader:
         data = list(map(lambda x: x.split(1), data))
         for template_img, template_bbox, search_img, search_bbox in zip(*data):
-            if i==0:
+            if first_frame:
                 template_img, template_bbox = search_img, search_bbox
             # Move tensor to device
             data_slice = (template_img, template_bbox, search_img, search_bbox, patch)
@@ -196,15 +203,50 @@ def main(config_f='config/config.ini'):
             patch_search = torch.where(patch_warpped_s==0, search_img, patch_warpped_s)
 
             # Init template
-            if i==0: 
-                init(model, patch_template, template_bbox )
+            if first_frame: 
+                init(model, patch_template, template_bbox)
+                # init(model, template_img, template_bbox )
+                first_frame = False
+                bbox = search_bbox.cpu().squeeze().numpy()
+                print(i, 'temp bbox:', template_bbox.cpu().numpy())
 
+                if save_result:
+                    frame = np.ascontiguousarray(kornia.tensor_to_image(patch_template.byte()))
+                    x, y, w, h = template_bbox.squeeze().to(int).cpu().numpy()
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 8)
+                    font = cv2.FONT_HERSHEY_SIMPLEX 
+                    org = (50, 50) 
+                    fontScale = 2
+                    color = (0, 0, 255) 
+                    thickness = 3
+                    cv2.putText(frame, 'Initialization', org, font,  fontScale, color, thickness, cv2.LINE_AA) 
             # Tracking
-            track_bbox = torch.tensor(bbox).unsqueeze_(dim=0) if bbox else template_bbox
-            bbox = track(model, smooth_lr, patch_search, track_bbox)
+            else:
+                track_bbox = torch.tensor(bbox).unsqueeze_(dim=0)
+                bbox = track(model, smooth_lr, patch_search, track_bbox)
+                # bbox = track(model, smooth_lr, search_img, track_bbox)
+                print(i, 'track bbox: ', track_bbox.cpu().numpy())
+
+                if cv2.waitKey(1) & 0xFF == ord('r'):
+                    first_frame, bbox = True, None
+                    print('reset at =======================================')
+
+                # if i%1000==0: # change this number to 200?
+                #     first_frame, bbox = True, None
+                #     print('reset at =======================================')
+                if save_result and not first_frame:
+                    frame = np.ascontiguousarray(kornia.tensor_to_image(patch_search.byte()))
+                    x, y, w, h = bbox
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 8)
             i += 1
-            if cv2.waitKey(1) & 0xFF == ord('r'):
-                i, bbox = 0, None
+            if save_result:
+                f_path = str(dir_path)+'/result_sm/' + '{0:05d}'.format(i) + '.jpg'
+                out = cv2.imwrite(f_path, frame)
+                bbox_file.write('{0:d},{1:d},{2:d},{3:d}\n'.format(x, y, w, h))
+                # videoWriter.write(frame)
+                print(out, i, f_path)
+    if save_result:
+        bbox_file.close()   
 
 
 if __name__ == '__main__':

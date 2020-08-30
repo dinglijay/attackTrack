@@ -56,24 +56,17 @@ def rand_shift(img_hw, bbox, shift_pos=(-0.1, 0.1), shift_wh=(-0.3, 0.1), target
     delta_y = shift_pos[0] + (shift_pos[1] - shift_pos[0]) * torch.rand((B,1)).to(device)
 
     if target == 'large':
-        # delta_w = shift_wh[0] + (shift_wh[1] - shift_wh[0]) * torch.rand((B,1)).to(device)
-        # delta_h = shift_wh[0] + (shift_wh[1] - shift_wh[0]) * torch.rand((B,1)).to(device)
-        # delta_w = torch.randn_like(delta_x).abs()/-0.05
-        # delta_h = torch.randn_like(delta_w) / 20 + delta_w*0.8
-
         delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
-        delta_h = torch.randn_like(delta_w) / 20 + delta_w
-        
-
+        delta_h = torch.randn_like(delta_w) / 30 + delta_w
     elif target == 'small':
-        # delta_h = -(torch.randn_like(delta_x).abs()/3).clamp(0, 0.8)+0.01
-        # delta_w = torch.randn_like(delta_h) / 20 + delta_h
-        # delta_w = delta_w.clamp(-0.8, 0.01)
         delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
-        delta_h = torch.randn_like(delta_w) / 20 + delta_w
-        
+        delta_h = torch.randn_like(delta_w) / 30 + delta_w*2
+        delta_y += delta_h/5
         # delta_y += delta_h/2.0
         # delta_x += delta_w/2.0
+    elif target == 'random':
+        delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
+        delta_h = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
     else:
         raise
 
@@ -99,7 +92,7 @@ if __name__ == "__main__":
 
     fig, ax = plt.subplots(1,1,num='bbox')
     for i in range(1000):
-        track_box = rand_shift(img_hw, search_bbox, target='small')
+        track_box = rand_shift(img_hw, search_bbox,  (-0.02, 0.02), (-0.02, 0.02), target='random')
         ax.imshow(np.zeros((img_hw[0], img_hw[1], 3)))
         for i in range(search_bbox.shape[0]):
             x, y, w, h = search_bbox[i].cpu().numpy()

@@ -42,7 +42,7 @@ class Patch_applier(object):
         super(Patch_applier, self).__init__()
         para_trans_color = {'brightness': 0.2, 'contrast': 0.1, 'saturation': 0.0, 'hue': 0.0}
         para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
-        self.pert_sz_ratio = (0.5, 0.4)
+        self.pert_sz_ratio = (0.5, 0.5)
     
         # patch_name = 'patches/random.jpg'
         patch_name = args.patch

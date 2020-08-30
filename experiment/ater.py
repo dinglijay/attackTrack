@@ -272,6 +272,7 @@ class PatchTrainer(object):
         shift_wh = eval(config['patch']['shift_wh'])
         pert_sz_ratio = eval(config['patch']['pert_sz_ratio'])
         pert_pos_delta = eval(config['patch']['pert_pos_delta'])
+        template_shift = eval(config['patch']['template_shift'])
         get_bbox = scale_bbox_keep_ar if config.getboolean('patch', 'scale_bbox_keep_ar') else scale_bbox
 
         loss_tv_margin = config.getfloat('loss','loss_tv_margin')
@@ -301,7 +302,7 @@ class PatchTrainer(object):
 
         # Setup Dataset
         dataset = AttackDataset(video, n_frames=train_nFrames, frame_sample=frame_sample)
-        dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=False, num_workers=8)
+        dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
 
         # Generate patch and setup optimizer
         if config.getboolean('train', 'patch_snapshot'):
@@ -317,7 +318,9 @@ class PatchTrainer(object):
                 # Move tensor to device
                 template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
-                # Gen tracking bbox  
+                # Gen tracking bbox 
+                if not template_shift:
+                    template_bbox = rand_shift(template_img.shape[-2:], template_bbox, template_shift, template_shift, 'random')
                 track_bbox = rand_shift(template_img.shape[-2:], search_bbox, shift_pos, shift_wh, target)
                 
                 # # Tracking and get label
@@ -437,6 +440,11 @@ class PatchTrainer(object):
         patch_sear_img = kornia.tensor_to_image(patch_search.byte()).reshape(-1, img_w, 3)
         patch_temp_img = np.ascontiguousarray(patch_temp_img)
         patch_sear_img = np.ascontiguousarray(patch_sear_img)
+
+        for i, xywh in enumerate(template_bbox.cpu().numpy()):
+            x, y, w, h = list(map(int, xywh))
+            y += i*img_h
+            cv2.rectangle(patch_temp_img, (x, y), (x+w, y+h), (0, 0, 255), 3)
 
         for i, xywh in enumerate(track_bbox.cpu().numpy()):
             x, y, w, h = list(map(int, xywh))
