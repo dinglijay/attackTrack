@@ -57,11 +57,11 @@ def rand_shift(img_hw, bbox, shift_pos=(-0.1, 0.1), shift_wh=(-0.3, 0.1), target
 
     if target == 'large':
         delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
-        delta_h = torch.randn_like(delta_w) / 30 + delta_w
+        delta_h = torch.randn_like(delta_w) / 30 + delta_w/2
     elif target == 'small':
         delta_w = torch.tensor(truncnorm.rvs(shift_wh[0], shift_wh[1], size=(B,1)), device=device)
-        delta_h = torch.randn_like(delta_w) / 30 + delta_w*2
-        delta_y += delta_h/5
+        delta_h = torch.randn_like(delta_w) / 30 + delta_w
+        # delta_y += delta_h/6.0
         # delta_y += delta_h/2.0
         # delta_x += delta_w/2.0
     elif target == 'random':

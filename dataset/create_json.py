@@ -19,7 +19,7 @@ def process_one_category(category_name='data/lasot/cup'):
             full_occ = [list(map(int, x.strip().split(','))) for x in f.readlines()][0]
         with open(os.path.join(category_name, video, "out_of_view.txt"), 'r') as f:
             out_of_view = [list(map(int, x.strip().split(','))) for x in f.readlines()][0]
-        assert len(gt_traj)==len(full_occ)==len(out_of_view)
+        assert len(gt_traj)==len(full_occ)==len(out_of_view), 'videos {:s}'.format(video)
 
         img_names = sorted(glob(os.path.join(category_name, video, 'img', '*.jp*')))
         im = cv2.imread(img_names[0])

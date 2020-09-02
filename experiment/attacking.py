@@ -208,7 +208,6 @@ def main(config_f='config/config.ini', save_result=False):
                 # init(model, template_img, template_bbox )
                 first_frame = False
                 bbox = search_bbox.cpu().squeeze().numpy()
-                print(i, 'temp bbox:', template_bbox.cpu().numpy())
 
                 if save_result:
                     frame = np.ascontiguousarray(kornia.tensor_to_image(patch_template.byte()))
@@ -225,7 +224,7 @@ def main(config_f='config/config.ini', save_result=False):
                 track_bbox = torch.tensor(bbox).unsqueeze_(dim=0)
                 bbox = track(model, smooth_lr, patch_search, track_bbox)
                 # bbox = track(model, smooth_lr, search_img, track_bbox)
-                print(i, 'track bbox: ', track_bbox.cpu().numpy())
+                print(i)
 
                 if cv2.waitKey(1) & 0xFF == ord('r'):
                     first_frame, bbox = True, None

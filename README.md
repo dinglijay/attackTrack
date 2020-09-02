@@ -84,7 +84,7 @@ Adversarial  Attack on Visual Object Tracking
 
 ### Test and Evaluation on LaSOT
 ```
-python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siammask_r50_l3/config.yaml --video cup-10 --vis
+python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siammask_r50_l3/config.yaml --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
 
 python experiment/test.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
 
