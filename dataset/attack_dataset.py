@@ -90,7 +90,7 @@ class AttackDataset(Dataset):
 
         # load images to ram if they are not too much
         self.imgs = None
-        if len(self.img_names) <= 1000:
+        if len(self.img_names) <= 100:
             if 'data' in self.img_names[0]:
                 self.imgs = [np.transpose(cv2.imread(im_name).astype(np.float32), (2, 0, 1)) \
                             for im_name in self.img_names]

@@ -243,14 +243,14 @@ class PatchTrainer(object):
             losses.append(loss)
         if self.config['train']['victim'] == 'siammask':
             loss0, loss1, loss2, loss3 = losses
-            loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 1e4*loss3
-            loss_feat = loss_feat * 5e5
+            # loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 2e4*loss3
+            loss_feat = loss3
+            loss_feat = loss_feat * 8e10
         elif self.config['train']['victim'] == 'siamrpn':
             loss1, loss2, loss3 = losses            
             loss_feat = loss1 + loss2 + loss3
             # print('loss1: {:.3f}, loss2: {:.3f}, loss3: {:.3f}, loss_feat: {:.3f}'.format \
             #         (loss1.item()*1e6, loss2.item()*1e6, loss3.item()*1e6, loss_feat.item()*1e6) )
-
             loss_feat = loss_feat * 1e3
         return -loss_feat
 
@@ -298,7 +298,7 @@ class PatchTrainer(object):
         total_variation = kornia.losses.TotalVariation()
 
         # Non-printability Score
-        nps = NPSCalculator('experiment/30values.txt', patch_sz).to(device)
+        # nps = NPSCalculator('experiment/30values.txt', patch_sz).to(device)
 
         # Setup Dataset
         dataset = AttackDataset(video, n_frames=train_nFrames, frame_sample=frame_sample)
@@ -319,7 +319,7 @@ class PatchTrainer(object):
                 template_img, template_bbox, search_img, search_bbox = tuple(map(lambda x: x.to(device), data))
 
                 # Gen tracking bbox 
-                if not template_shift:
+                if template_shift:
                     template_bbox = rand_shift(template_img.shape[-2:], template_bbox, template_shift, template_shift, 'random')
                 track_bbox = rand_shift(template_img.shape[-2:], search_bbox, shift_pos, shift_wh, target)
                 
@@ -353,7 +353,7 @@ class PatchTrainer(object):
 
                 loss_delta = self.loss_delta(pscore, loss_delta_margin, loss_delta_topk)
                 loss_feat = self.loss_feat(self.model)
-                loss_nps = nps(patch/255.0)
+                loss_nps = 0 #nps(patch/255.0)
                 tv = 0.05 * total_variation(patch)/torch.numel(patch)
                 loss_tv = torch.max(tv, torch.tensor(loss_tv_margin).to(device))
                 # loss_clss = self.loss_clss(pscore)
@@ -361,8 +361,8 @@ class PatchTrainer(object):
 
                 losses = {'delta':loss_delta, 'feat':loss_feat, 'tv':loss_tv, 'nps': loss_nps}
                 loss = self.loss_overall(losses)
-                print('epoch {:} -> loss_feat: {:.3f}, loss_delta: {:.3f}, loss_tv: {:.3f}, loss_nps: {:.3f}'.format \
-                    (epoch, loss_feat.item(), loss_delta.item(), loss_tv.item(), loss_nps.item()) )
+                print('epoch {:} -> loss_feat: {:.3f}, loss_delta: {:.3f}, loss_tv: {:.3f}'.format \
+                    (epoch, loss_feat.item(), loss_delta.item(), loss_tv.item()) )
                 
                 # self.show_pscore_delta(pscore, self.model.rpn_pred_loc, bbox_src)
                 # self.show_attack_plt(pscore, bbox, bbox_src, patch)

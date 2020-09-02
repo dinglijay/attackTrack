@@ -41,7 +41,7 @@ def get_frames(video_name, rotate=False):
             ret, frame = cap.read()
             if ret:
                 if rotate:
-                    frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_COUNTERCLOCKWISE) 
+                    frame = cv2.rotate(frame, cv2.cv2.ROTATE_90_CLOCKWISE) 
                 yield frame
             else:
                 break

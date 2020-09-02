@@ -66,10 +66,13 @@ def scale_bbox_keep_ar(bbox, scale_wh, aspect, delta_xy=(0.0, 0.0)):
         c_x = c_x + w * delta_xy[0]
         c_y = c_y + h * delta_xy[1]
     
-        scale_w, scale_h = scale_wh
-        H = (scale_w * scale_h * w * h * aspect).sqrt()
+        if isinstance(scale_wh, tuple):
+            ratio = scale_wh[0] * scale_wh[1] 
+        else:
+            ratio = scale_wh
+        H = (ratio * w * h * aspect).sqrt()
         H = torch.min(h*(1-abs(2*delta_xy[1])), H)
-        W = (scale_w * scale_h * w * h / aspect).sqrt()
+        W = (ratio * w * h / aspect).sqrt()
         W = torch.min(w*(1-abs(2*delta_xy[0])), W)
 
         bbox[:, 0] = c_x - W//2
@@ -85,10 +88,13 @@ def scale_bbox_keep_ar(bbox, scale_wh, aspect, delta_xy=(0.0, 0.0)):
         c_x = c_x + w * delta_xy[0]
         c_y = c_y + h * delta_xy[1]
 
-        scale_w, scale_h = scale_wh
-        H = math.sqrt(scale_w * scale_h * w * h * aspect)
+        if isinstance(scale_wh, tuple):
+            ratio = scale_wh[0] * scale_wh[1] 
+        else:
+            ratio = scale_wh
+        H = math.sqrt(ratio * w * h * aspect)
         H = min(H, h*(1-abs(2*delta_xy[1])))
-        W = math.sqrt(scale_w * scale_h * w * h / aspect)
+        W = math.sqrt(ratio * w * h / aspect)
         W = min(W, w*(1-abs(2*delta_xy[0])))
         X = c_x - W//2
         Y = c_y - H//2
