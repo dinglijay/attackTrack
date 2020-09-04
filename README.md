@@ -63,6 +63,13 @@ Adversarial  Attack on Visual Object Tracking
     s: torch.Tensor = deltac / (v + 1e-20)
 ```
 
+## Install latex to draw performance plots
+```
+    apt-get install texlive-fonts-recommended texlive-fonts-extra
+    apt-get install dvipng
+    apt-get install cm-super
+```
+
 ### Test and Evaluate
 ```
     # Link data 
@@ -84,11 +91,11 @@ Adversarial  Attack on Visual Object Tracking
 
 ### Test and Evaluation on LaSOT
 ```
-python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siammask_r50_l3/config.yaml --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
+python experiment/test.py --snapshot ../pysot/experiments/siammask_r50_l3/model.pth --config ../pysot/experiments/siammask_r50_l3/config.yaml --dataset LaSOT-cup --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
 
-python experiment/test.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
+python experiment/test.py --snapshot ../pysot/experiments/siamrpn_r50_l234_dwxcorr/model.pth --config ../pysot/experiments/siamrpn_r50_l234_dwxcorr/config.yaml --dataset LaSOT-cup --patch data/lasot/cup/cup-7/large_siamrpn_feat-delta-tv.png
 
-python experiment/eval.py --tracker_path ./results --dataset LaSOT-car --num 4 --tracker_prefix 'model'
+python experiment/eval.py --tracker_path ./results --num 4 --dataset LaSOT-car  --tracker_prefix 'model'
 
 python experiment/test.py --snapshot ../pysot/experiments/siamrpn_alex_dwxcorr/model.pth  --dataset LaSOT-cup --config ../pysot/experiments/siamrpn_alex_dwxcorr/config.yaml --video cup-10 --vis
 ```
