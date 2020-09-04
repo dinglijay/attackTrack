@@ -153,7 +153,7 @@ def main(config_f='config/config.ini', save_result=False):
 
     # Setup Dataset
     dataset = AttackDataset(root_dir=video, test=True)
-    dataloader = DataLoader(dataset, batch_size=100, num_workers=0)
+    dataloader = DataLoader(dataset, batch_size=100, num_workers=2)
 
     # Load Patch
     patch = cv2.imread(patch_save_p)
