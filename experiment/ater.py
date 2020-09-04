@@ -234,7 +234,7 @@ class PatchTrainer(object):
 
         return 10*clss.mean()
        
-    def loss_feat(self, model):
+    def loss_feat(self, model, weight=1.0):
         losses = list()
         for zf, xf in zip(model.zf_all, model.xf_all):
             zgramf = gram_matrix(zf)
@@ -244,14 +244,15 @@ class PatchTrainer(object):
         if self.config['train']['victim'] == 'siammask':
             loss0, loss1, loss2, loss3 = losses
             # loss_feat = loss0 + 1e1*loss1 + 1e3*loss2 + 2e4*loss3
-            loss_feat = loss3
-            loss_feat = loss_feat * 8e10
+            loss_feat = 5e10 * loss3
+            loss_feat = loss_feat * weight
         elif self.config['train']['victim'] == 'siamrpn':
             loss1, loss2, loss3 = losses            
             loss_feat = loss1 + loss2 + loss3
             # print('loss1: {:.3f}, loss2: {:.3f}, loss3: {:.3f}, loss_feat: {:.3f}'.format \
             #         (loss1.item()*1e6, loss2.item()*1e6, loss3.item()*1e6, loss_feat.item()*1e6) )
-            loss_feat = loss_feat * 1e3
+            loss_feat = loss_feat * 4e3
+            loss_feat = loss_feat * weight
         return -loss_feat
 
     def loss_overall(self, losses):
@@ -278,6 +279,7 @@ class PatchTrainer(object):
         loss_tv_margin = config.getfloat('loss','loss_tv_margin')
         loss_delta_topk = config.getint('loss','loss_delta_topk')
         loss_delta_margin = config.getfloat('loss','loss_delta_margin')
+        loss_feat_weight = config.getfloat('loss', 'loss_feat_weight')
 
         para_trans_color = eval(config['transformParam']['color'])
         para_trans_affine = eval(config['transformParam']['affine'])
@@ -305,7 +307,7 @@ class PatchTrainer(object):
         dataloader = DataLoader(dataset, batch_size=BATCHSIZE, shuffle=True, num_workers=8)
 
         # Generate patch and setup optimizer
-        if config.getboolean('train', 'patch_snapshot'):
+        if config.getboolean('train', 'patch_snapshot') and isfile(config.get('train', 'patch_snapshot_f')):
             patch = cv2.resize(cv2.imread(config.get('train', 'patch_snapshot_f')), (patch_sz[1], patch_sz[0]))
             patch = kornia.image_to_tensor(patch).to(torch.float).clamp(0.1, 255)
         else:
@@ -352,7 +354,7 @@ class PatchTrainer(object):
                 pscore, delta, pscore_size, bbox = self.get_tracking_result(*pert_data, out_layer='bbox')
 
                 loss_delta = self.loss_delta(pscore, loss_delta_margin, loss_delta_topk)
-                loss_feat = self.loss_feat(self.model)
+                loss_feat = self.loss_feat(self.model, loss_feat_weight)
                 loss_nps = 0 #nps(patch/255.0)
                 tv = 0.05 * total_variation(patch)/torch.numel(patch)
                 loss_tv = torch.max(tv, torch.tensor(loss_tv_margin).to(device))

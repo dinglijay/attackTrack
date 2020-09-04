@@ -33,6 +33,7 @@ parser.add_argument('--snapshot', default='', type=str, help='snapshot of models
 parser.add_argument('--video', default='', type=str, help='eval one special video')
 parser.add_argument('--vis', action='store_true', help='whether visualzie result')
 parser.add_argument('--patch', type=str, help='patch file')
+parser.add_argument('--ratio', type=float, default=0.20, help='patch ratio')
 args = parser.parse_args()
 
 torch.set_num_threads(1)
@@ -42,10 +43,14 @@ class Patch_applier(object):
         super(Patch_applier, self).__init__()
         para_trans_color = {'brightness': 0.2, 'contrast': 0.1, 'saturation': 0.0, 'hue': 0.0}
         para_trans_affine = {'degrees': 2, 'translate': [0.01, 0.01], 'scale': [0.95, 1.05], 'shear': [-2, 2] }
-        self.pert_sz_ratio = (0.5, 0.5)
+        # self.pert_sz_ratio = (0.5, 0.4)
+        self.pert_sz_ratio = args.ratio
     
-        # patch_name = 'patches/random.jpg'
-        patch_name = args.patch
+        # patch_name = 'patches/random_noise.jpg'
+        if args.patch == 'random_noise':
+            patch_name = 'data/patches/random_noise.jpg'
+        else:
+            patch_name = args.patch
         self.load_patch(patch_name)
         self.setup_trans(para_trans_color, para_trans_affine)
 
@@ -140,12 +145,22 @@ def main():
                                             load_img=False)
 
     # setup applier
-    applier = Patch_applier()
+    if args.patch != 'None':
+        applier = Patch_applier()
 
     # result saving path
-    video_trained = os.path.split(os.path.split(args.patch)[0])[-1]
-    patch_name = os.path.splitext(os.path.split(args.patch)[-1])[0]
-    model_name = video_trained+'_'+patch_name
+
+
+    if args.patch == 'None':
+        model_name = 'clean_mask' if 'siammask' in args.snapshot else 'clear_rpn'
+    elif args.patch == 'random_noise':
+        model_name = 'randomNoise_mask' if 'siammask' in args.snapshot else 'randomNoise_rpn'
+        model_name = model_name + str(args.ratio)
+    else:
+        video_trained = os.path.split(os.path.split(args.patch)[0])[-1]
+        patch_name = os.path.splitext(os.path.split(args.patch)[-1])[0]
+        model_name = video_trained+'_'+patch_name
+
     print('Save results to:', model_name)
                                     
     # model_name = args.snapshot.split('/')[-1].split('.')[0]
@@ -242,7 +257,8 @@ def main():
             track_times = []
             for idx, (img, gt_bbox) in enumerate(video):
                 tic = cv2.getTickCount()
-                img = applier.apply_patch_without_trans(img, gt_bbox)
+                if args.patch != 'None':
+                    img = applier.apply_patch_without_trans(img, gt_bbox)
                 # img = applier.apply_patch_cv2(img, gt_bbox)
                 if idx == 0:
                     cx, cy, w, h = get_axis_aligned_bbox(np.array(gt_bbox))

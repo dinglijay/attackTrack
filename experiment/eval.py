@@ -15,6 +15,9 @@ from toolkit.evaluation import OPEBenchmark, AccuracyRobustnessBenchmark, \
         EAOBenchmark, F1Benchmark
 
 from dataset.DatasetFactory import LaSOTClsDataset
+from toolkit.visualization import draw_success_precision, draw_eao, draw_f1
+from matplotlib import rc
+rc("text", usetex=False)
 
 
 parser = argparse.ArgumentParser(description='tracking evaluation')
@@ -23,6 +26,7 @@ parser.add_argument('--dataset', '-d', type=str, help='dataset name')
 parser.add_argument('--num', '-n', default=1, type=int, help='number of thread to eval')
 parser.add_argument('--tracker_prefix', '-t', default='', type=str, help='tracker name')
 parser.add_argument('--show_video_level', '-s', dest='show_video_level', action='store_true')
+parser.add_argument('--vis', dest='vis', action='store_true')
 parser.set_defaults(show_video_level=False)
 args = parser.parse_args()
 
@@ -98,6 +102,14 @@ def main():
                 norm_precision_ret.update(ret)
         benchmark.show_result(success_ret, precision_ret, norm_precision_ret,
                 show_video_level=args.show_video_level)
+
+        if args.vis:
+            draw_success_precision(success_ret,
+                    name=dataset.name,
+                    videos=dataset.attr['ALL'],
+                    attr='ALL',
+                    precision_ret=precision_ret,
+                    norm_precision_ret=norm_precision_ret)
     elif 'UAV' in args.dataset:
         dataset = UAVDataset(args.dataset, root)
         dataset.set_tracker(tracker_dir, trackers)
