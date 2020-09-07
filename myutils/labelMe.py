@@ -36,7 +36,8 @@ def get_frames(video_name):
 
 def main():
 
-    video_name = 'data/physical/Examples/Bottle_rpn_large/VID_20200825_182655.mp4'
+    # video_name = 'data/physical/Examples/Bottle_rpn_large/VID_20200825_182655.mp4'
+    video_name = args.video_name
     window_name = "Lable Me"
     cv2.namedWindow(window_name, cv2.WND_PROP_FULLSCREEN)
 
